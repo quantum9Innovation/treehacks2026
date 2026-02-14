@@ -1,4 +1,4 @@
-"""Camera-to-arm calibration via point correspondence and SVD solver."""
+"""Camera-to-arm calibration via point correspondence and affine solver."""
 
 import json
 import logging
@@ -14,21 +14,42 @@ logger = logging.getLogger("agent_v2.calibration")
 DEFAULT_CALIBRATION_PATH = Path(__file__).parent / "calibration_data.json"
 
 
-def solve_rigid_transform(
+def _solve_affine(cam_points, arm_points):
+    """Solve affine transform: arm = A @ cam + b (least squares).
+
+    Returns (3, 4) matrix M where arm = M @ [cam; 1].
+    """
+    n = len(cam_points)
+    # Build design matrix: each row is [cx, cy, cz, 1]
+    ones = np.ones((n, 1))
+    A = np.hstack([cam_points, ones])  # (N, 4)
+
+    # Solve for each arm axis independently via least squares
+    M = np.zeros((3, 4))
+    for i in range(3):
+        result, _, _, _ = np.linalg.lstsq(A, arm_points[:, i], rcond=None)
+        M[i] = result
+    return M
+
+
+def solve_affine_transform(
     cam_points: np.ndarray,
     arm_points: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """Solve for rigid transform (R, t) mapping camera 3D → arm 3D.
+    outlier_rounds: int = 2,
+) -> tuple[np.ndarray, float]:
+    """Solve for affine transform mapping camera 3D → arm 3D.
 
-    Uses SVD-based Procrustes alignment (least squares optimal).
+    Uses least-squares with iterative outlier rejection.
+    An affine transform (12 DOF) can compensate for depth scaling,
+    axis shear, and FOV-dependent distortion that a rigid transform cannot.
 
     Args:
         cam_points: (N, 3) array of camera-frame 3D points
         arm_points: (N, 3) array of corresponding arm-frame 3D points
+        outlier_rounds: Number of outlier rejection passes
 
     Returns:
-        R: (3, 3) rotation matrix
-        t: (3,) translation vector
+        M: (3, 4) affine matrix where arm = M @ [cam_x, cam_y, cam_z, 1]
         rmse: Root mean square error in mm
 
     Raises:
@@ -37,49 +58,54 @@ def solve_rigid_transform(
     if len(cam_points) < 4:
         raise ValueError(f"Need at least 4 point pairs, got {len(cam_points)}")
 
-    # Compute centroids
-    centroid_cam = cam_points.mean(axis=0)
-    centroid_arm = arm_points.mean(axis=0)
+    cam = cam_points.copy()
+    arm = arm_points.copy()
 
-    # Center both point clouds
-    centered_cam = cam_points - centroid_cam
-    centered_arm = arm_points - centroid_arm
+    for round_i in range(outlier_rounds):
+        M = _solve_affine(cam, arm)
+        ones = np.ones((len(cam), 1))
+        transformed = (M @ np.hstack([cam, ones]).T).T
+        errors = np.linalg.norm(transformed - arm, axis=1)
+        rmse = float(np.sqrt(np.mean(errors**2)))
 
-    # Compute cross-covariance matrix
-    H = centered_cam.T @ centered_arm
+        threshold = max(2.0 * rmse, 15.0)
+        keep = errors <= threshold
+        if keep.sum() < 4:
+            break
+        removed = len(cam) - keep.sum()
+        if removed > 0:
+            print(f"  Outlier rejection round {round_i + 1}: removed {removed} point(s) (threshold={threshold:.1f}mm)")
+            cam = cam[keep]
+            arm = arm[keep]
+        else:
+            break
 
-    # SVD
-    U, _S, Vt = np.linalg.svd(H)
-    V = Vt.T
-
-    # Handle reflection case
-    d = np.linalg.det(V @ U.T)
-    sign_matrix = np.diag([1.0, 1.0, d])
-
-    # Optimal rotation
-    R = V @ sign_matrix @ U.T
-
-    # Translation
-    t = centroid_arm - R @ centroid_cam
-
-    # Compute RMSE
-    transformed = (R @ cam_points.T).T + t
-    errors = np.linalg.norm(transformed - arm_points, axis=1)
+    # Final solve on clean data
+    M = _solve_affine(cam, arm)
+    ones = np.ones((len(cam), 1))
+    transformed = (M @ np.hstack([cam, ones]).T).T
+    errors = np.linalg.norm(transformed - arm, axis=1)
     rmse = float(np.sqrt(np.mean(errors**2)))
 
-    return R, t, rmse
+    print(f"  Final solve used {len(cam)}/{len(cam_points)} points, RMSE={rmse:.2f}mm")
+
+    return M, rmse
+
+
+def apply_affine(M: np.ndarray, cam_point: np.ndarray) -> np.ndarray:
+    """Apply affine transform: arm = M @ [cam_x, cam_y, cam_z, 1]."""
+    h = np.append(cam_point, 1.0)
+    return M @ h
 
 
 def save_calibration(
-    R: np.ndarray,
-    t: np.ndarray,
+    M: np.ndarray,
     rmse: float,
     path: Path = DEFAULT_CALIBRATION_PATH,
 ) -> None:
     """Save calibration to JSON."""
     data = {
-        "rotation": R.tolist(),
-        "translation": t.tolist(),
+        "affine_matrix": M.tolist(),
         "rmse_mm": rmse,
     }
     path.write_text(json.dumps(data, indent=2))
@@ -89,21 +115,25 @@ def save_calibration(
 
 def load_calibration(
     path: Path = DEFAULT_CALIBRATION_PATH,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     """Load calibration from JSON.
 
     Returns:
-        R: (3, 3) rotation matrix
-        t: (3,) translation vector
+        M: (3, 4) affine matrix
 
     Raises:
         FileNotFoundError: If calibration file doesn't exist
     """
     data = json.loads(path.read_text())
-    R = np.array(data["rotation"])
-    t = np.array(data["translation"])
+    if "affine_matrix" in data:
+        M = np.array(data["affine_matrix"])
+    else:
+        # Backwards compat: old format had rotation + translation
+        R = np.array(data["rotation"])
+        t = np.array(data["translation"])
+        M = np.hstack([R, t.reshape(3, 1)])
     logger.info(f"Calibration loaded from {path} (RMSE: {data['rmse_mm']:.2f}mm)")
-    return R, t
+    return M
 
 
 class CalibrationProcedure:
@@ -114,34 +144,34 @@ class CalibrationProcedure:
     2. At each position, show camera view in OpenCV window
     3. User clicks on arm tip/gripper in the image
     4. Record (camera_3d, arm_coords) pairs
-    5. Solve for rigid transform via SVD
+    5. Solve for affine transform via least squares
     """
 
-    # Predefined arm positions spanning the workspace (x, y, z, t).
-    # Wide spread across all three axes is critical for the SVD solver,
-    # especially Z which is flipped on inverted-mount arms.
+    # Predefined arm positions spanning the workspace (x, y, z) in mm.
+    # Z is ground-relative (0 = ground, positive = up).
+    # Wide spread across all three axes is critical for the solver.
     CALIBRATION_POSITIONS = [
-        # Low Z positions
-        (250, 0, 25, 0),
-        (250, 100, 25, 0),
-        (250, -100, 25, 0),
+        # Low Z positions (near ground)
+        (250, 0, 25),
+        (250, 100, 25),
+        (250, -100, 25),
         # Mid Z positions
-        (200, 0, 130, 0),
-        (200, 100, 130, 0),
-        (200, -100, 130, 0),
+        (200, 0, 130),
+        (200, 100, 130),
+        (200, -100, 130),
         # High Z positions
-        (150, 0, 240, 0),
-        (150, 50, 240, 0),
-        (150, -50, 240, 0),
+        (150, 0, 240),
+        (150, 50, 240),
+        (150, -50, 240),
         # Extra spread
-        (300, 0, 75, 0),
+        (300, 0, 75),
     ]
 
     def __init__(self, camera, arm, coordinate_transform):
         """
         Args:
             camera: RealSenseCamera instance (started)
-            arm: RobotArmController instance
+            arm: Motion instance (ground already probed)
             coordinate_transform: CoordinateTransform instance (for deprojection)
         """
         self.camera = camera
@@ -181,11 +211,11 @@ class CalibrationProcedure:
 
         return color_image, depth_image, depth_frame
 
-    def run(self, save_path: Path = DEFAULT_CALIBRATION_PATH) -> tuple[np.ndarray, np.ndarray, float]:
+    def run(self, save_path: Path = DEFAULT_CALIBRATION_PATH) -> tuple[np.ndarray, float]:
         """Run the interactive calibration procedure.
 
         Returns:
-            R, t, rmse from the solved transform
+            M, rmse from the solved affine transform
         """
         cam_points = []
         arm_points = []
@@ -203,17 +233,16 @@ class CalibrationProcedure:
         print("Press 's' to skip a position, 'q' to quit early.\n")
 
         try:
-            for i, (x, y, z, t) in enumerate(self.CALIBRATION_POSITIONS):
+            for i, (x, y, z) in enumerate(self.CALIBRATION_POSITIONS):
                 print(f"\n--- Position {i + 1}/{len(self.CALIBRATION_POSITIONS)} ---")
-                print(f"Moving arm to x={x}, y={y}, z={z}...")
+                print(f"Moving arm to x={x}, y={y}, z={z} (ground-relative)...")
 
-                self.arm.pose_ctrl(x, y, z, t)
+                self.arm.move_to(x, y, z)
                 time.sleep(1.0)
 
                 # Get actual arm position (may differ slightly)
-                pose = self.arm.pose_get()
-                arm_pos = pose["position"]
-                arm_xyz = np.array([arm_pos["x"], arm_pos["y"], arm_pos["z"]])
+                ax, ay, az = self.arm.get_pose()
+                arm_xyz = np.array([ax, ay, az])
 
                 self._clicked_pixel = None
                 # Keep depth_frame from last capture for deprojection on confirm
@@ -241,7 +270,7 @@ class CalibrationProcedure:
                     )
                     cv2.putText(
                         color_display,
-                        f"Arm: x={arm_pos['x']:.0f} y={arm_pos['y']:.0f} z={arm_pos['z']:.0f}",
+                        f"Arm: x={ax:.0f} y={ay:.0f} z={az:.0f}",
                         (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.6,
@@ -308,30 +337,18 @@ class CalibrationProcedure:
                             self._clicked_pixel = None
                             continue
 
-                        # Check depth at pixel first for a clear error
-                        depth_mm = self.ct.get_depth_at_pixel(current_depth_frame, px, py)
-                        if depth_mm is None:
+                        # Deproject using averaged patch (15x15, IQR-filtered)
+                        cam_3d = self.ct.deproject_patch(px, py, current_depth_frame, patch_size=15)
+                        if cam_3d is None:
                             print(
-                                f"  ERROR: No valid depth at pixel ({px}, {py}). "
-                                "All depth values in the 5x5 patch are zero. "
+                                f"  ERROR: Not enough valid depth around pixel ({px}, {py}). "
                                 "The arm tip may be too close/far from the camera, "
                                 "or the pixel is in a depth shadow. Try clicking a nearby spot."
                             )
                             self._clicked_pixel = None
                             continue
 
-                        cam_3d = self.ct.deproject_pixel(px, py, depth_frame=current_depth_frame)
-                        if cam_3d is None:
-                            intrinsics_ok = self.ct._intrinsics is not None
-                            print(
-                                f"  ERROR: Deprojection failed at pixel ({px}, {py}).\n"
-                                f"    Intrinsics loaded: {intrinsics_ok}\n"
-                                f"    Depth at pixel: {depth_mm:.1f}mm\n"
-                                "    This is unexpected — check camera setup."
-                            )
-                            self._clicked_pixel = None
-                            continue
-
+                        depth_mm = cam_3d[2]  # Z in camera frame ≈ depth
                         cam_points.append(cam_3d)
                         arm_points.append(arm_xyz)
                         print(
@@ -356,17 +373,18 @@ class CalibrationProcedure:
         cam_arr = np.array(cam_points)
         arm_arr = np.array(arm_points)
 
-        R, t_vec, rmse = solve_rigid_transform(cam_arr, arm_arr)
+        M, rmse = solve_affine_transform(cam_arr, arm_arr)
 
-        # Per-point error breakdown
-        transformed = (R @ cam_arr.T).T + t_vec
+        # Per-point error breakdown using ALL original points
+        ones = np.ones((len(cam_arr), 1))
+        transformed = (M @ np.hstack([cam_arr, ones]).T).T
         per_point_errors = np.linalg.norm(transformed - arm_arr, axis=1)
 
         print(f"\n{'=' * 60}")
         print("CALIBRATION RESULTS")
         print(f"{'=' * 60}")
-        print(f"  Points used: {len(cam_points)}")
-        print(f"  Overall RMSE: {rmse:.2f}mm")
+        print(f"  Points collected: {len(cam_points)}")
+        print(f"  RMSE (after outlier removal): {rmse:.2f}mm")
         if rmse < 10:
             print("  Quality: EXCELLENT")
         elif rmse < 20:
@@ -374,34 +392,33 @@ class CalibrationProcedure:
         else:
             print("  Quality: Poor - consider recalibrating")
 
-        print(f"\n  Per-point errors:")
+        print(f"\n  Per-point errors (all collected points):")
         for idx, (err, cam_pt, arm_pt, est_pt) in enumerate(
             zip(per_point_errors, cam_arr, arm_arr, transformed)
         ):
-            flag = " *** OUTLIER" if err > 2 * rmse and err > 15 else ""
+            flag = " *** OUTLIER (excluded from solve)" if err > 2 * rmse and err > 15 else ""
             print(
                 f"    Point {idx + 1}: error={err:.1f}mm  "
                 f"arm=[{arm_pt[0]:.0f},{arm_pt[1]:.0f},{arm_pt[2]:.0f}] "
                 f"estimated=[{est_pt[0]:.0f},{est_pt[1]:.0f},{est_pt[2]:.0f}]{flag}"
             )
 
-        # Show axis mapping for sanity check
-        print(f"\n  Rotation matrix (camera → arm axis mapping):")
+        # Show affine matrix for sanity check
+        A_part = M[:, :3]
+        b_part = M[:, 3]
+        print(f"\n  Affine matrix (3x3 part):")
         axis_labels = ["X", "Y", "Z"]
         for i in range(3):
             components = []
             for j in range(3):
-                val = R[i, j]
-                if abs(val) > 0.1:
+                val = A_part[i, j]
+                if abs(val) > 0.05:
                     sign = "+" if val > 0 else "-"
-                    components.append(f"{sign}{abs(val):.2f}*cam_{axis_labels[j]}")
+                    components.append(f"{sign}{abs(val):.3f}*cam_{axis_labels[j]}")
             mapping = " ".join(components) if components else "~0"
             print(f"    arm_{axis_labels[i]} = {mapping}")
-
-        print(f"  Translation: [{t_vec[0]:.1f}, {t_vec[1]:.1f}, {t_vec[2]:.1f}]mm")
-        det = np.linalg.det(R)
-        print(f"  Rotation det: {det:.4f} (should be +1.0)")
+        print(f"  Translation: [{b_part[0]:.1f}, {b_part[1]:.1f}, {b_part[2]:.1f}]mm")
         print()
 
-        save_calibration(R, t_vec, rmse, save_path)
-        return R, t_vec, rmse
+        save_calibration(M, rmse, save_path)
+        return M, rmse

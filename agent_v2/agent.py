@@ -11,9 +11,9 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 
-from agent.arm_controller import RobotArmController
 from agent.camera import RealSenseCamera
 from agent.vlm_agent import ConfirmationHandler, create_openai_client
+from motion_controller.motion import Motion
 
 from .annotate import annotate_frame
 from .calibration import CalibrationProcedure, DEFAULT_CALIBRATION_PATH
@@ -24,6 +24,10 @@ from .tools import TOOL_DECLARATIONS
 from .vision.base import VisionBackend
 
 logger = logging.getLogger("agent_v2")
+
+# Gripper defaults (for direct SDK calls — Motion doesn't wrap gripper)
+GRIPPER_SPEED = 100
+GRIPPER_ACC = 50
 
 
 def convert_tools_to_openai_format() -> list[dict]:
@@ -47,6 +51,9 @@ class AgentV2:
     Separates perception (vision backend) from reasoning (LLM) from
     execution (motor commands). The LLM references objects by ID
     instead of reasoning about raw pixel coordinates.
+
+    Uses the Motion controller for arm movement (IK-based, ground-relative
+    coordinates, torque-based ground probing).
     """
 
     def __init__(
@@ -56,8 +63,6 @@ class AgentV2:
         vision_backend: VisionBackend,
         model: str = "gpt-4.1-mini",
         arm_port: str | None = None,
-        z_offset: float = 300.0,
-        invert_z: bool = True,
         auto_confirm: bool = False,
         debug: bool = False,
         reasoning_effort: str = "low",
@@ -77,7 +82,7 @@ class AgentV2:
 
         # Hardware
         self.camera = RealSenseCamera()
-        self.arm = RobotArmController(port=arm_port, z_offset=z_offset, invert_z=invert_z)
+        self.motion = Motion(port=arm_port, inverted=True)
 
         # Vision
         self.vision = vision_backend
@@ -103,15 +108,19 @@ class AgentV2:
         # Set up coordinate transform intrinsics from camera
         self.ct.set_intrinsics_from_camera(self.camera)
 
+        # Probe ground (required before any Motion movement)
+        print("Probing ground level...")
+        self.motion.probe_ground()
+
         print("Moving arm to home position...")
-        self.arm.move_home()
+        self.motion.home()
         time.sleep(1)
         print("Agent ready.")
 
     def stop(self) -> None:
         """Stop the agent (cleanup hardware)."""
         print("\nStopping agent...")
-        self.arm.move_home()
+        self.motion.home()
         time.sleep(1)
         self.camera.stop()
         print("Agent stopped.")
@@ -247,16 +256,43 @@ class AgentV2:
         target_y = obj.position_arm.y
         target_z = obj.position_arm.z + z_offset_mm
 
-        return self.arm.pose_ctrl(x=target_x, y=target_y, z=target_z, t=0)
+        ok = self.motion.move_to(target_x, target_y, target_z)
+        if ok:
+            return {
+                "status": "success",
+                "message": f"Moved to {obj.label} (id={object_id}) at x={target_x:.0f}, y={target_y:.0f}, z={target_z:.0f}",
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"move_to failed — position ({target_x:.0f}, {target_y:.0f}, {target_z:.0f}) may be unreachable",
+            }
 
     def _execute_pose_get(self, _args: dict[str, Any]) -> dict[str, Any]:
-        return self.arm.pose_get()
+        x, y, z = self.motion.get_pose()
+        return {
+            "status": "success",
+            "position": {"x": round(x, 1), "y": round(y, 1), "z": round(z, 1)},
+            "message": f"Current position: x={x:.1f}, y={y:.1f}, z={z:.1f} (ground-relative)",
+        }
 
     def _execute_move_home(self, _args: dict[str, Any]) -> dict[str, Any]:
-        return self.arm.move_home()
+        self.motion.home()
+        time.sleep(1)
+        return {"status": "success", "message": "Moved to home position"}
 
     def _execute_gripper_ctrl(self, args: dict[str, Any]) -> dict[str, Any]:
-        return self.arm.gripper_ctrl(angle=args["angle"])
+        angle = max(0, min(90, args["angle"]))
+        self.motion.arm.gripper_angle_ctrl(
+            angle=angle, speed=GRIPPER_SPEED, acc=GRIPPER_ACC
+        )
+        time.sleep(0.5)
+        state = "open" if angle > 45 else "closed"
+        return {
+            "status": "success",
+            "gripper_angle": angle,
+            "message": f"Gripper {state} at {angle} degrees",
+        }
 
     def _execute_tool(self, tool_call) -> tuple[dict[str, Any] | str, list[dict] | None]:
         """Execute a tool call. Returns (result, optional_image_content)."""
@@ -287,8 +323,13 @@ class AgentV2:
                             )
                 z_off = args.get("z_offset_mm", 50)
                 action_str = f"GOTO {obj_desc} (z_offset={z_off}mm)"
+            elif tool_name == "move_home":
+                action_str = "MOVE ARM to HOME position"
+            elif tool_name == "gripper_ctrl":
+                state = "OPEN" if args["angle"] > 45 else "CLOSE"
+                action_str = f"GRIPPER {state} to {args['angle']:.1f} degrees"
             else:
-                action_str = self.confirmation.format_action(tool_name, args)
+                action_str = f"Execute {tool_name} with args: {json.dumps(args)}"
 
             print("\n" + "=" * 50)
             print("PENDING ACTION:")
@@ -462,7 +503,7 @@ class AgentV2:
         print("Commands:")
         print("  quit       - Exit the agent")
         print("  home       - Move arm to home position")
-        print("  pos        - Show current arm position")
+        print("  pos        - Show current arm position (ground-relative)")
         print("  calibrate  - Run calibration procedure")
         print("  detect     - Run perception only (no LLM)")
         print("  touch      - Touch debug (click to move arm, then reset)")
@@ -480,14 +521,14 @@ class AgentV2:
                     break
 
                 if task.lower() == "home":
-                    if self.confirmation.request_confirmation("move_home", {}):
-                        self.arm.move_home()
-                        print("Moved to home position.")
+                    self.motion.home()
+                    time.sleep(1)
+                    print("Moved to home position.")
                     continue
 
                 if task.lower() == "pos":
-                    pos = self.arm.pose_get()
-                    print(f"Current position: {pos}")
+                    x, y, z = self.motion.get_pose()
+                    print(f"Current position: x={x:.1f}, y={y:.1f}, z={z:.1f} (ground-relative)")
                     continue
 
                 if task.lower() == "calibrate":
@@ -522,7 +563,7 @@ class AgentV2:
     def _run_calibration(self) -> None:
         """Run the interactive calibration procedure."""
         try:
-            proc = CalibrationProcedure(self.camera, self.arm, self.ct)
+            proc = CalibrationProcedure(self.camera, self.motion, self.ct)
             R, t, rmse = proc.run(save_path=self._calibration_path)
             # Reload calibration into coordinate transform
             self.ct._R = R
@@ -546,8 +587,8 @@ class AgentV2:
     def _run_touch_debug(self) -> None:
         """Interactive touch debug: click a point, arm moves there, then resets.
 
-        Shows side-by-side color + depth (like calibration). Click on the
-        color image to pick a target. The pixel is deprojected to 3D,
+        Shows side-by-side color + depth (like calibration). Click on
+        either image to pick a target. The pixel is deprojected to 3D,
         transformed to arm coordinates, and the arm moves there. After a
         pause, the arm returns home and waits for the next click.
 
@@ -583,7 +624,7 @@ class AgentV2:
 
         # Move home first
         print("Moving arm to home position...")
-        self.arm.move_home()
+        self.motion.home()
         time.sleep(1.0)
 
         try:
@@ -607,11 +648,10 @@ class AgentV2:
                 )
 
                 # Show current arm position
-                pose = self.arm.pose_get()
-                pos = pose["position"]
+                x, y, z = self.motion.get_pose()
                 cv2.putText(
                     color_display,
-                    f"Arm: x={pos['x']:.0f} y={pos['y']:.0f} z={pos['z']:.0f}",
+                    f"Arm: x={x:.0f} y={y:.0f} z={z:.0f}",
                     (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
@@ -678,17 +718,17 @@ class AgentV2:
                 )
 
                 # Attempt to move
-                result = self.arm.pose_ctrl(x=target_x, y=target_y, z=target_z, t=0)
-                if result["status"] == "success":
+                ok = self.motion.move_to(target_x, target_y, target_z)
+                if ok:
                     print(f"    Moved to target. Holding for 2 seconds...")
                     time.sleep(2.0)
                 else:
-                    print(f"    Move failed: {result['message']}")
+                    print(f"    Move failed — position may be unreachable.")
                     time.sleep(0.5)
 
                 # Return home
                 print("    Returning home...")
-                self.arm.move_home()
+                self.motion.home()
                 time.sleep(1.0)
 
         finally:

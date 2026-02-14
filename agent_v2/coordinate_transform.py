@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pyrealsense2 as rs
 
-from .calibration import DEFAULT_CALIBRATION_PATH, load_calibration
+from .calibration import DEFAULT_CALIBRATION_PATH, apply_affine, load_calibration
 from .models import DetectedObject, Point3D, SceneState
 
 logger = logging.getLogger("agent_v2.coordinate_transform")
@@ -20,13 +20,12 @@ class CoordinateTransform:
         self._depth_scale: float = 0.001  # default, updated from device
         self._align: rs.align = rs.align(rs.stream.color)
 
-        # Load calibration if available
-        self._R: np.ndarray | None = None
-        self._t: np.ndarray | None = None
+        # Load calibration if available (3x4 affine matrix)
+        self._M: np.ndarray | None = None
         if calibration_path.exists():
             try:
                 print(f"Loading calibration from: {calibration_path}")
-                self._R, self._t = load_calibration(calibration_path)
+                self._M = load_calibration(calibration_path)
             except Exception as e:
                 print(
                     f"WARNING: Failed to load calibration from {calibration_path}: {e}\n"
@@ -78,7 +77,7 @@ class CoordinateTransform:
 
     @property
     def has_calibration(self) -> bool:
-        return self._R is not None and self._t is not None
+        return self._M is not None
 
     def get_aligned_frames(self, frames: rs.composite_frame) -> rs.composite_frame:
         """Align depth to color frame."""
@@ -158,6 +157,61 @@ class CoordinateTransform:
         # Convert to mm
         return np.array([point[0] * 1000, point[1] * 1000, point[2] * 1000])
 
+    def deproject_patch(
+        self, u: int, v: int, depth_frame: rs.depth_frame, patch_size: int = 15
+    ) -> np.ndarray | None:
+        """Deproject a patch of pixels around (u, v) and return the averaged 3D point.
+
+        Deprojects each pixel in the patch individually, filters outlier 3D points
+        via IQR on depth, then returns the mean. More robust than a single pixel
+        for calibration.
+
+        Args:
+            u: X pixel coordinate (center of patch)
+            v: Y pixel coordinate (center of patch)
+            depth_frame: RealSense depth frame
+            patch_size: Side length of the square patch
+
+        Returns:
+            (3,) array [x, y, z] in mm in camera frame, or None if insufficient data
+        """
+        if self._intrinsics is None:
+            return None
+
+        w = depth_frame.get_width()
+        h = depth_frame.get_height()
+        half = patch_size // 2
+
+        points = []
+        for dy in range(-half, half + 1):
+            for dx in range(-half, half + 1):
+                px, py = u + dx, v + dy
+                if 0 <= px < w and 0 <= py < h:
+                    d = depth_frame.get_distance(px, py)
+                    if d > 0:
+                        pt = rs.rs2_deproject_pixel_to_point(
+                            self._intrinsics, [float(px), float(py)], d
+                        )
+                        points.append([pt[0] * 1000, pt[1] * 1000, pt[2] * 1000])
+
+        if len(points) < 5:
+            return None
+
+        pts = np.array(points)
+
+        # Filter outliers via IQR on depth (Z axis in camera frame)
+        z_vals = pts[:, 2]
+        q1, q3 = np.percentile(z_vals, [25, 75])
+        iqr = q3 - q1
+        lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        mask = (z_vals >= lo) & (z_vals <= hi)
+        filtered = pts[mask]
+
+        if len(filtered) < 3:
+            return None
+
+        return filtered.mean(axis=0)
+
     def camera_to_arm(self, cam_point: np.ndarray) -> np.ndarray | None:
         """Transform camera-frame 3D point to arm-frame 3D point.
 
@@ -167,9 +221,9 @@ class CoordinateTransform:
         Returns:
             (3,) array in arm frame (mm), or None if not calibrated
         """
-        if self._R is None or self._t is None:
+        if self._M is None:
             return None
-        return self._R @ cam_point + self._t
+        return apply_affine(self._M, cam_point)
 
     def enrich_detections(
         self,
