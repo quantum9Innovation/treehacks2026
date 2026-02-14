@@ -152,19 +152,19 @@ class CalibrationProcedure:
     # Wide spread across all three axes is critical for the solver.
     CALIBRATION_POSITIONS = [
         # Low Z positions (near ground)
-        (250, 0, 25),
-        (250, 100, 25),
-        (250, -100, 25),
+        (350, 0, 80),
+        (350, 100, 80),
+        (350, -100, 80),
         # Mid Z positions
-        (200, 0, 130),
-        (200, 100, 130),
-        (200, -100, 130),
+        (300, 0, 130),
+        (300, 100, 130),
+        (300, -100, 130),
         # High Z positions
-        (150, 0, 240),
-        (150, 50, 240),
-        (150, -50, 240),
+        (250, 0, 240),
+        (250, 50, 240),
+        (250, -50, 240),
         # Extra spread
-        (300, 0, 75),
+        (400, 0, 100),
     ]
 
     def __init__(self, camera, arm, coordinate_transform):
