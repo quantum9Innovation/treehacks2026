@@ -19,6 +19,7 @@ SERIAL_GLOB_PATTERNS = [
 speed: float = 25
 turning: float = 10
 skip: bool = False
+repeat: bool = True
 
 Pose = NewType("Pose", tuple[float, float, float, float])
 clip: Callable[[float, float, float], float] = lambda x, a, b: max(min(x, b), a)
@@ -96,20 +97,23 @@ def detect_serial_port():
 
 def main(stdscr):
     stdscr.nodelay(True)
-    port = detect_serial_port()
+    ports = ["/dev/ttyUSB0", "/dev/ttyUSB1"]
 
-    if port is None:
+    if len(ports) == 0:
         print("Error: No USB serial device found. Connect the arm or use --port.")
         sys.exit(1)
 
-    print(f"Connecting to RoArm-M2 on {port}...")
-    arm = roarm(roarm_type="roarm_m2", port=port, baudrate=115200)
-    arm.echo_set(0)
-    arm.torque_set(1)
+    print(f"Connecting to RoArm-M2 on {ports}...")
+    arms = [roarm(roarm_type="roarm_m2", port=port, baudrate=115200) for port in ports]
+    for arm in arms:
+        arm.echo_set(0)
+        arm.torque_set(1)
 
     print("Moving to home position...")
-    arm.move_init()
-    time.sleep(1)
+
+    for arm in arms:
+        arm.move_init()
+        time.sleep(1)
 
     pose = Pose((250, 0, 250, 0))
     delay: float = 0.05
@@ -117,15 +121,20 @@ def main(stdscr):
     try:
         if not skip:
             stream = load("data.json")["trajectory"]
-            for x, y, z, t in stream:
-                pose = Pose((x, y, z, t))
-                arm.pose_ctrl([x, y, z, t])
-                time.sleep(delay)
+            flag = True
+            while repeat or flag:
+                for x, y, z, t in stream:
+                    pose = Pose((x, y, z, t))
+                    for arm in arms:
+                        arm.pose_ctrl([x, y, z, t])
+                    time.sleep(delay)
+                    flag = False
 
         pose = Pose((250, 0, 250, 0))
         while True:
             x, y, z, t = pose
-            arm.pose_ctrl([x, y, z, t])
+            for arm in arms:
+                arm.pose_ctrl([x, y, z, t])
             time.sleep(delay)
 
             try:
@@ -153,7 +162,8 @@ def main(stdscr):
             pose = correct(pose)
 
     except KeyboardInterrupt:
-        arm.move_init()
+        for arm in arms:
+            arm.move_init()
         print("Keyboard interrupt")
 
 
