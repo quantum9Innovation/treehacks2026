@@ -1,11 +1,13 @@
 import curses
 import glob
+import math
 import sys
 import time
 from typing import Callable, NewType
 
 from roarm_sdk.roarm import roarm
 
+from read import load
 
 SERIAL_GLOB_PATTERNS = [
     "/dev/cu.usbserial-*",
@@ -16,6 +18,7 @@ SERIAL_GLOB_PATTERNS = [
 
 speed: float = 25
 turning: float = 10
+skip: bool = False
 
 Pose = NewType("Pose", tuple[float, float, float, float])
 clip: Callable[[float, float, float], float] = lambda x, a, b: max(min(x, b), a)
@@ -67,6 +70,12 @@ def correct(pose: Pose) -> Pose:
     y = clip(y, -490, 490)
     z = clip(z, 0, 490)
     t = clip(t, 0, 90)
+
+    if math.hypot(x, y, z) > 490:
+        x = 250
+        y = 0
+        z = 250
+
     return Pose((x, y, z, t))
 
 
@@ -106,6 +115,12 @@ def main(stdscr):
     delay: float = 0.05
 
     try:
+        if not skip:
+            stream = load("data.json")["trajectory"]
+            for x, y, z, t in stream:
+                pose = Pose((x, y, z, t))
+                arm.pose_ctrl([x, y, z, t])
+                time.sleep(delay)
         while True:
             x, y, z, t = pose
             arm.pose_ctrl([x, y, z, t])
