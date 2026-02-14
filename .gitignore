@@ -1,4 +1,4 @@
-# Python
+# Python --->
 .venv/
 __pycache__/
 *.pyc
@@ -7,3 +7,11 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# Nix --->
+# Ignore build outputs from performing a nix-build or `nix build` command
+result
+result-*
+
+# Ignore automatically generated direnv output
+.direnv
