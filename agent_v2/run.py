@@ -87,17 +87,6 @@ def main() -> int:
         default=None,
         help="Serial port for robot arm (auto-detect if omitted)",
     )
-    parser.add_argument(
-        "--z-offset",
-        type=float,
-        default=300.0,
-        help="Z offset for inverted mounting in mm (default: 300)",
-    )
-    parser.add_argument(
-        "--no-invert-z",
-        action="store_true",
-        help="Disable Z-axis inversion",
-    )
 
     # Behavior
     parser.add_argument(
@@ -140,27 +129,26 @@ def main() -> int:
     try:
         if args.calibrate:
             # Calibration-only mode
-            from agent.arm_controller import RobotArmController
+            import time
             from agent.camera import RealSenseCamera
+            from motion_controller.motion import Motion
             from .calibration import CalibrationProcedure
             from .coordinate_transform import CoordinateTransform
 
             camera = RealSenseCamera()
             camera.start()
-            arm = RobotArmController(
-                port=args.port,
-                z_offset=args.z_offset,
-                invert_z=not args.no_invert_z,
-            )
+            motion = Motion(port=args.port, inverted=True)
             ct = CoordinateTransform(calibration_path=calibration_path)
             ct.set_intrinsics_from_camera(camera)
 
+            print("Probing ground level...")
+            motion.probe_ground()
+
             try:
-                proc = CalibrationProcedure(camera, arm, ct)
+                proc = CalibrationProcedure(camera, motion, ct)
                 proc.run(save_path=calibration_path)
             finally:
-                arm.move_home()
-                import time
+                motion.home()
                 time.sleep(1)
                 camera.stop()
             return 0
@@ -175,8 +163,6 @@ def main() -> int:
                 vision_backend=vision_backend,
                 model=args.model,
                 arm_port=args.port,
-                z_offset=args.z_offset,
-                invert_z=not args.no_invert_z,
                 auto_confirm=True,
                 debug=args.debug,
                 calibration_path=calibration_path,
@@ -197,8 +183,6 @@ def main() -> int:
             vision_backend=vision_backend,
             model=args.model,
             arm_port=args.port,
-            z_offset=args.z_offset,
-            invert_z=not args.no_invert_z,
             auto_confirm=args.auto_confirm,
             debug=args.debug,
             reasoning_effort=args.reasoning_effort,

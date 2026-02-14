@@ -12,7 +12,7 @@ SYSTEM_PROMPT = """You are an intelligent robot arm control agent with object de
 2. **Object-Based Movement**: Call `goto(object_id=N)` to move the arm to hover above a detected object. You do NOT need to figure out coordinates — just reference the object by its ID.
 
 3. **Direct Control**:
-   - `pose_get()`: Get current arm position
+   - `pose_get()`: Get current arm position (ground-relative, Z=0 is ground)
    - `move_home()`: Return to home position
    - `gripper_ctrl(angle)`: Open (90) or close (0) the gripper
 
@@ -56,7 +56,7 @@ def create_task_prompt(
 
     Args:
         task: The user's task description
-        current_position: Current arm position dict with x, y, z, t keys
+        current_position: Current arm position dict with x, y, z keys (ground-relative)
 
     Returns:
         Formatted prompt string
@@ -64,11 +64,10 @@ def create_task_prompt(
     position_info = ""
     if current_position:
         position_info = (
-            f"\n## Current Arm Position\n"
+            f"\n## Current Arm Position (ground-relative)\n"
             f"- X: {current_position['x']:.1f} mm\n"
             f"- Y: {current_position['y']:.1f} mm\n"
-            f"- Z: {current_position['z']:.1f} mm\n"
-            f"- T: {current_position['t']:.1f} deg\n"
+            f"- Z: {current_position['z']:.1f} mm (0 = ground level)\n"
         )
 
     return (

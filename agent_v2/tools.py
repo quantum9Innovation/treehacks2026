@@ -39,7 +39,8 @@ TOOL_DECLARATIONS = [
         "name": "pose_get",
         "description": (
             "Get the current position of the robot arm end effector. "
-            "Returns the current x, y, z coordinates in mm and the gripper rotation angle t in degrees."
+            "Returns the current x, y, z coordinates in mm. "
+            "Z is ground-relative (0 = ground level, positive = up)."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
