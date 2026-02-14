@@ -1,0 +1,7 @@
+name = "roarm"
+version = "1.0.0"
+defaultTargets = ["roarm"]
+
+[[lean_exe]]
+name = "roarm"
+root = "Main"
