@@ -34,7 +34,7 @@
         packages.default =
           (pkgs.lean.buildLeanPackage {
             name = "roarm";
-            roots = ["Main"];
+            roots = ["Main" "Math" "Types"];
             src = pkgs.lib.cleanSource ./.;
           })
           .executable;

@@ -2,6 +2,10 @@ name = "roarm"
 version = "1.0.0"
 defaultTargets = ["roarm"]
 
+[[lean_lib]]
+name = "Roarm"
+# If your files are in the root, this will pick up Math.lean, Types.lean, etc.
+
 [[lean_exe]]
 name = "roarm"
 root = "Main"

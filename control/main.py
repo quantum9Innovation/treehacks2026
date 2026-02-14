@@ -121,6 +121,8 @@ def main(stdscr):
                 pose = Pose((x, y, z, t))
                 arm.pose_ctrl([x, y, z, t])
                 time.sleep(delay)
+
+        pose = Pose((250, 0, 250, 0))
         while True:
             x, y, z, t = pose
             arm.pose_ctrl([x, y, z, t])
