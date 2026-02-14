@@ -10,13 +10,13 @@ SERIAL_GLOB_PATTERNS = [
     "/dev/cu.usbserial-*",
     "/dev/cu.usbmodem*",
     "/dev/ttyUSB*",
-    "/dev/ttyACM*"
+    "/dev/ttyACM*",
 ]
 MOVE_SPEED = 600
 MOVE_ACC = 100
 
 # Circle in the Y-Z plane (around the X axis)
-CIRCLE_X = 250       # fixed X distance from base
+CIRCLE_X = 250  # fixed X distance from base
 CIRCLE_CENTER_Y = 0  # center Y
 CIRCLE_CENTER_Z = 200  # center Z
 CIRCLE_RADIUS = 80
@@ -38,11 +38,27 @@ def detect_serial_port():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Make RoArm-M2 draw a circle around the X axis.")
-    parser.add_argument("--port", type=str, default=None, help="Serial port (auto-detected if omitted)")
-    parser.add_argument("--loops", type=int, default=2, help="Number of circles (default: 2)")
-    parser.add_argument("--radius", type=float, default=CIRCLE_RADIUS, help="Circle radius in mm (default: 80)")
-    parser.add_argument("--speed", type=int, default=MOVE_SPEED, help="Movement speed, 1-4096 (default: 600)")
+    parser = argparse.ArgumentParser(
+        description="Make RoArm-M2 draw a circle around the X axis."
+    )
+    parser.add_argument(
+        "--port", type=str, default=None, help="Serial port (auto-detected if omitted)"
+    )
+    parser.add_argument(
+        "--loops", type=int, default=2, help="Number of circles (default: 2)"
+    )
+    parser.add_argument(
+        "--radius",
+        type=float,
+        default=CIRCLE_RADIUS,
+        help="Circle radius in mm (default: 80)",
+    )
+    parser.add_argument(
+        "--speed",
+        type=int,
+        default=MOVE_SPEED,
+        help="Movement speed, 1-4096 (default: 600)",
+    )
     args = parser.parse_args()
 
     port = args.port or detect_serial_port()
@@ -85,4 +101,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 
