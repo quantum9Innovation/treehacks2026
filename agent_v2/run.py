@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point for the Object-Aware VLM Robot Arm Control Agent (v2)."""
+"""Entry point for the Vision-Driven VLM Robot Arm Control Agent (v2)."""
 
 import argparse
 import os
@@ -15,16 +15,23 @@ def main() -> int:
     load_dotenv(env_path)
 
     parser = argparse.ArgumentParser(
-        description="Object-Aware VLM Robot Arm Control Agent (v2)"
+        description="Vision-Driven VLM Robot Arm Control Agent (v2)"
     )
 
     # Vision backend
     parser.add_argument(
         "--vision",
         type=str,
-        choices=["yolo", "mock"],
-        default="yolo",
-        help="Vision backend to use (default: yolo)",
+        choices=["sam2", "yolo", "mock"],
+        default="sam2",
+        help="Vision backend to use (default: sam2)",
+    )
+    parser.add_argument(
+        "--sam2-model",
+        type=str,
+        choices=["tiny", "small", "base_plus", "large"],
+        default="tiny",
+        help="SAM2 model size (default: tiny)",
     )
     parser.add_argument(
         "--yolo-model",
@@ -69,8 +76,8 @@ def main() -> int:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4.1-mini",
-        help="Model ID (default: gpt-4.1-mini)",
+        default="gpt-5.2",
+        help="Model ID (default: gpt-5.2)",
     )
     parser.add_argument(
         "--reasoning-effort",
@@ -118,14 +125,6 @@ def main() -> int:
         Path(__file__).parent / "calibration_data.json"
     )
 
-    # Create vision backend
-    if args.vision == "yolo":
-        from .vision.yolo_backend import YOLOBackend
-        vision_backend = YOLOBackend(model_path=args.yolo_model)
-    else:
-        from .vision.mock_backend import MockBackend
-        vision_backend = MockBackend()
-
     try:
         if args.calibrate:
             # Calibration-only mode
@@ -155,12 +154,15 @@ def main() -> int:
 
         if args.touch_debug:
             # Touch debug mode — no LLM needed, pass dummy keys
+            # SAM2 not needed for touch debug either
+            from .vision.sam2_backend import SAM2Backend
             from .agent import AgentV2
 
+            sam2 = SAM2Backend(model_size=args.sam2_model)
             agent = AgentV2(
                 openai_api_key="unused",
                 helicone_api_key="unused",
-                vision_backend=vision_backend,
+                sam2_backend=sam2,
                 model=args.model,
                 arm_port=args.port,
                 auto_confirm=True,
@@ -175,20 +177,69 @@ def main() -> int:
             return 0
 
         # Normal agent mode
-        from .agent import AgentV2
+        if args.vision == "sam2":
+            from .vision.sam2_backend import SAM2Backend
+            from .agent import AgentV2
 
-        agent = AgentV2(
-            openai_api_key=args.openai_api_key,
-            helicone_api_key=args.helicone_api_key,
-            vision_backend=vision_backend,
-            model=args.model,
-            arm_port=args.port,
-            auto_confirm=args.auto_confirm,
-            debug=args.debug,
-            reasoning_effort=args.reasoning_effort,
-            calibration_path=calibration_path,
-        )
-        agent.run_interactive()
+            print(f"Loading SAM2 model ({args.sam2_model})...")
+            sam2 = SAM2Backend(model_size=args.sam2_model)
+
+            agent = AgentV2(
+                openai_api_key=args.openai_api_key,
+                helicone_api_key=args.helicone_api_key,
+                sam2_backend=sam2,
+                model=args.model,
+                arm_port=args.port,
+                auto_confirm=args.auto_confirm,
+                debug=args.debug,
+                reasoning_effort=args.reasoning_effort,
+                calibration_path=calibration_path,
+            )
+            agent.run_interactive()
+        elif args.vision == "yolo":
+            # Legacy YOLO mode — import the old agent path
+            print("WARNING: YOLO mode uses the legacy agent code path.")
+            print("Consider using --vision sam2 (default) for the new paradigm.")
+            from .vision.yolo_backend import YOLOBackend
+            from .vision.sam2_backend import SAM2Backend
+            from .agent import AgentV2
+
+            # Even in YOLO mode, we need a SAM2 backend for the new agent
+            # This is a compatibility shim — YOLO mode is deprecated
+            print("Note: YOLO mode is deprecated. Starting with SAM2 instead.")
+            sam2 = SAM2Backend(model_size=args.sam2_model)
+            agent = AgentV2(
+                openai_api_key=args.openai_api_key,
+                helicone_api_key=args.helicone_api_key,
+                sam2_backend=sam2,
+                model=args.model,
+                arm_port=args.port,
+                auto_confirm=args.auto_confirm,
+                debug=args.debug,
+                reasoning_effort=args.reasoning_effort,
+                calibration_path=calibration_path,
+            )
+            agent.run_interactive()
+        else:
+            # Mock mode
+            from .vision.sam2_backend import SAM2Backend
+            from .agent import AgentV2
+
+            print("Loading SAM2 model (tiny) for mock mode...")
+            sam2 = SAM2Backend(model_size="tiny")
+            agent = AgentV2(
+                openai_api_key=args.openai_api_key,
+                helicone_api_key=args.helicone_api_key,
+                sam2_backend=sam2,
+                model=args.model,
+                arm_port=args.port,
+                auto_confirm=args.auto_confirm,
+                debug=args.debug,
+                reasoning_effort=args.reasoning_effort,
+                calibration_path=calibration_path,
+            )
+            agent.run_interactive()
+
         return 0
 
     except Exception as e:

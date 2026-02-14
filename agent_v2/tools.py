@@ -1,38 +1,65 @@
-"""LLM tool declarations for the object-aware agent."""
+"""LLM tool declarations for the vision-driven SAM2 agent."""
 
 TOOL_DECLARATIONS = [
     {
-        "name": "describe_scene",
+        "name": "look",
         "description": (
-            "Capture a fresh camera frame, run object detection, and return "
-            "an annotated image with bounding boxes plus a structured JSON list "
-            "of all detected objects with their IDs, labels, and 3D arm coordinates. "
-            "Call this first to see what objects are in the scene before deciding "
-            "what to do."
+            "Capture a fresh camera frame and encode it for segmentation. "
+            "Returns the raw color image and a colorized depth image so you can "
+            "see the scene. No objects are detected — you decide what to interact "
+            "with by examining the images. After calling look(), you can call "
+            "segment(pixel_x, pixel_y) on any point of interest."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
     {
-        "name": "goto",
+        "name": "segment",
         "description": (
-            "Move the robot arm to hover above a detected object. "
-            "The object must have been detected in the most recent describe_scene() call. "
-            "The arm moves to the object's 3D position with an optional Z offset "
-            "(default 50mm above) to avoid collision."
+            "Run SAM2 point-prompt segmentation at a pixel coordinate. "
+            "Returns a mask overlay image, the mask's centroid pixel, and the "
+            "corresponding 3D arm coordinates. Use this to precisely locate an "
+            "object before moving to it. Requires a prior look() call."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "object_id": {
+                "pixel_x": {
                     "type": "integer",
-                    "description": "ID of the detected object to move to (from describe_scene output)",
+                    "description": "X pixel coordinate to segment at (0 = left edge, 639 = right edge)",
+                },
+                "pixel_y": {
+                    "type": "integer",
+                    "description": "Y pixel coordinate to segment at (0 = top edge, 479 = bottom edge)",
+                },
+            },
+            "required": ["pixel_x", "pixel_y"],
+        },
+    },
+    {
+        "name": "goto_pixel",
+        "description": (
+            "Move the robot arm to the 3D position corresponding to a pixel "
+            "coordinate. The pixel is deprojected using the depth camera and "
+            "transformed to arm coordinates via calibration. An optional Z offset "
+            "(default 50mm) is added to hover above the target."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pixel_x": {
+                    "type": "integer",
+                    "description": "X pixel coordinate to move to",
+                },
+                "pixel_y": {
+                    "type": "integer",
+                    "description": "Y pixel coordinate to move to",
                 },
                 "z_offset_mm": {
                     "type": "number",
-                    "description": "Height offset above the object in mm (default: 50). Use 0 to go directly to object height.",
+                    "description": "Height offset above the target in mm (default: 50). Use 0 to go directly to target height.",
                 },
             },
-            "required": ["object_id"],
+            "required": ["pixel_x", "pixel_y"],
         },
     },
     {

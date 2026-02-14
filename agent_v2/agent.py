@@ -1,4 +1,4 @@
-"""AgentV2: Object-aware robot arm control orchestrator."""
+"""AgentV2: Vision-driven robot arm control orchestrator using SAM2."""
 
 import base64
 import json
@@ -15,13 +15,11 @@ from agent.camera import RealSenseCamera
 from agent.vlm_agent import ConfirmationHandler, create_openai_client
 from motion_controller.motion import Motion
 
-from .annotate import annotate_frame
-from .calibration import CalibrationProcedure, DEFAULT_CALIBRATION_PATH
+from .calibration import DEFAULT_CALIBRATION_PATH
 from .coordinate_transform import CoordinateTransform
-from .models import DetectedObject, SceneState
 from .prompts import SYSTEM_PROMPT, create_task_prompt
 from .tools import TOOL_DECLARATIONS
-from .vision.base import VisionBackend
+from .vision.sam2_backend import SAM2Backend
 
 logger = logging.getLogger("agent_v2")
 
@@ -46,22 +44,44 @@ def convert_tools_to_openai_format() -> list[dict]:
 
 
 class AgentV2:
-    """Object-aware robot arm control agent.
+    """Vision-driven robot arm control agent using SAM2.
 
-    Separates perception (vision backend) from reasoning (LLM) from
-    execution (motor commands). The LLM references objects by ID
-    instead of reasoning about raw pixel coordinates.
+    The LLM sees raw camera images and decides what to interact with.
+    SAM2 provides precise segmentation masks at clicked points.
+    The existing pixel-to-3D coordinate pipeline converts clicks to arm coords.
 
     Uses the Motion controller for arm movement (IK-based, ground-relative
     coordinates, torque-based ground probing).
     """
 
+    @staticmethod
+    def _draw_coordinate_grid(image: np.ndarray) -> np.ndarray:
+        """Draw a labeled coordinate grid every 80px on a copy of the image."""
+        out = image.copy()
+        h, w = out.shape[:2]
+        color = (180, 180, 180)  # light gray
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.35
+        thickness = 1
+
+        # Draw vertical lines and top-edge labels
+        for x in range(0, w, 80):
+            cv2.line(out, (x, 0), (x, h), color, 1)
+            cv2.putText(out, str(x), (x + 2, 12), font, font_scale, color, thickness)
+
+        # Draw horizontal lines and left-edge labels
+        for y in range(0, h, 80):
+            cv2.line(out, (0, y), (w, y), color, 1)
+            cv2.putText(out, str(y), (2, y + 12), font, font_scale, color, thickness)
+
+        return out
+
     def __init__(
         self,
         openai_api_key: str,
         helicone_api_key: str,
-        vision_backend: VisionBackend,
-        model: str = "gpt-4.1-mini",
+        sam2_backend: SAM2Backend,
+        model: str = "gpt-5.2",
         arm_port: str | None = None,
         auto_confirm: bool = False,
         debug: bool = False,
@@ -74,7 +94,7 @@ class AgentV2:
         if debug:
             logging.getLogger("agent_v2").setLevel(logging.DEBUG)
 
-        logger.info(f"Initializing AgentV2 with model={model}, vision={vision_backend.name()}")
+        logger.info(f"Initializing AgentV2 with model={model}, vision=sam2")
 
         # OpenAI client via Helicone
         self.client = create_openai_client(openai_api_key, helicone_api_key, debug=debug)
@@ -85,7 +105,7 @@ class AgentV2:
         self.motion = Motion(port=arm_port, inverted=True)
 
         # Vision
-        self.vision = vision_backend
+        self.sam2 = sam2_backend
 
         # Coordinate transform
         self.ct = CoordinateTransform(calibration_path=calibration_path)
@@ -97,8 +117,10 @@ class AgentV2:
         # Tools
         self.tools = convert_tools_to_openai_format()
 
-        # Current scene state (updated by describe_scene)
-        self._current_scene: SceneState | None = None
+        # Frame cache (populated by look(), used by segment() and goto_pixel())
+        self._last_color_image: np.ndarray | None = None
+        self._last_depth_frame: rs.depth_frame | None = None
+        self._last_depth_image: np.ndarray | None = None
 
     def start(self) -> None:
         """Start the agent (initialize hardware)."""
@@ -157,32 +179,6 @@ class AgentV2:
 
         return color_image, depth_image, depth_frame
 
-    def _run_perception(self, confidence_threshold: float = 0.3) -> tuple[SceneState, np.ndarray, np.ndarray]:
-        """Run the full perception pipeline.
-
-        Returns:
-            scene: SceneState with enriched detections
-            annotated_image: Color image with bounding boxes drawn
-            depth_image: Colorized depth image
-        """
-        color_image, depth_image, depth_frame = self._capture_aligned_frames()
-        h, w = color_image.shape[:2]
-
-        # Detect objects
-        detections = self.vision.detect(color_image, confidence_threshold=confidence_threshold)
-
-        # Build scene
-        scene = SceneState(objects=detections, image_width=w, image_height=h)
-
-        # Enrich with depth + 3D coordinates
-        self.ct.enrich_scene(scene, depth_frame)
-
-        # Annotate frame
-        annotated = annotate_frame(color_image, detections)
-
-        self._current_scene = scene
-        return scene, annotated, depth_image
-
     def _encode_image(self, image: np.ndarray, quality: int = 85) -> str:
         """Encode image as base64 JPEG."""
         _, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
@@ -190,28 +186,45 @@ class AgentV2:
 
     # ── Tool executors ──────────────────────────────────────────
 
-    def _execute_describe_scene(self, _args: dict[str, Any]) -> tuple[str, list[dict]]:
-        """Execute describe_scene tool. Returns (text_result, image_content_blocks)."""
-        scene, annotated, depth_image = self._run_perception()
+    def _execute_look(self, _args: dict[str, Any]) -> tuple[str, list[dict]]:
+        """Execute look tool: capture frame, encode for SAM2, return images.
 
-        scene_json = json.dumps(scene.to_dict(), indent=2)
-        text_result = f"Detected {len(scene.objects)} objects:\n{scene_json}"
+        Returns (text_result, image_content_blocks).
+        """
+        color_image, depth_image, depth_frame = self._capture_aligned_frames()
 
-        # Build image content blocks for the LLM response
-        annotated_b64 = self._encode_image(annotated)
+        # Cache for subsequent segment() / goto_pixel() calls
+        self._last_color_image = color_image
+        self._last_depth_frame = depth_frame
+        self._last_depth_image = depth_image
+
+        # Encode image for SAM2 (slow on CPU, ~2-5s)
+        print("Encoding image for SAM2...")
+        encode_time = self.sam2.set_image(color_image)
+
+        h, w = color_image.shape[:2]
+        text_result = (
+            f"Camera frame captured ({w}x{h}). "
+            f"SAM2 image encoded in {encode_time:.1f}s. "
+            f"Ready for segment() queries."
+        )
+
+        # Draw coordinate grid on a copy (keep _last_color_image clean for SAM2)
+        color_with_grid = self._draw_coordinate_grid(color_image)
+        color_b64 = self._encode_image(color_with_grid)
         depth_b64 = self._encode_image(depth_image)
 
         image_content = [
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{annotated_b64}",
+                    "url": f"data:image/jpeg;base64,{color_b64}",
                     "detail": "high",
                 },
             },
             {
                 "type": "text",
-                "text": "[Annotated camera image above with object bounding boxes. Depth image below.]",
+                "text": "[Camera image with coordinate grid (labels every 80px). Depth image below.]",
             },
             {
                 "type": "image_url",
@@ -224,48 +237,192 @@ class AgentV2:
 
         return text_result, image_content
 
-    def _execute_goto(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Execute goto tool — move arm to a detected object."""
-        object_id = args["object_id"]
+    def _execute_segment(self, args: dict[str, Any]) -> tuple[str, list[dict]]:
+        """Execute segment tool: SAM2 point-prompt segmentation.
+
+        Returns (text_result, image_content_blocks).
+        """
+        pixel_x = args["pixel_x"]
+        pixel_y = args["pixel_y"]
+
+        if self._last_color_image is None or self._last_depth_frame is None:
+            return json.dumps({
+                "status": "error",
+                "message": "No image available. Call look() first.",
+            }), []
+
+        # Run SAM2 segmentation
+        print(f"Running SAM2 segmentation at ({pixel_x}, {pixel_y})...")
+        t0 = time.time()
+        mask, score, bbox = self.sam2.segment_point(pixel_x, pixel_y)
+        seg_time = time.time() - t0
+        logger.info(f"SAM2 segmentation in {seg_time:.2f}s, score={score:.3f}")
+
+        # Compute centroid
+        cx, cy = self.sam2.mask_centroid(mask)
+
+        # Compute 3D arm coordinates from centroid
+        arm_coords = None
+        depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, cx, cy)
+        if depth_mm is not None:
+            cam_3d = self.ct.deproject_pixel(cx, cy, depth_mm=depth_mm)
+            if cam_3d is not None:
+                arm_3d = self.ct.camera_to_arm(cam_3d)
+                if arm_3d is not None:
+                    arm_coords = {
+                        "x": round(float(arm_3d[0]), 1),
+                        "y": round(float(arm_3d[1]), 1),
+                        "z": round(float(arm_3d[2]), 1),
+                    }
+
+        result = {
+            "status": "success",
+            "click": {"pixel_x": pixel_x, "pixel_y": pixel_y},
+            "centroid": {"pixel_x": cx, "pixel_y": cy},
+            "score": round(score, 3),
+            "bbox": {"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3]},
+            "mask_area_px": int(mask.sum()),
+            "depth_mm": round(depth_mm, 1) if depth_mm else None,
+            "arm_coordinates": arm_coords,
+            "segment_time_s": round(seg_time, 2),
+        }
+
+        text_result = json.dumps(result)
+
+        # Draw annotation overlay
+        annotated = self._annotate_segmentation(
+            self._last_color_image, mask, bbox, (pixel_x, pixel_y), (cx, cy)
+        )
+        annotated_b64 = self._encode_image(annotated)
+
+        image_content = [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{annotated_b64}",
+                    "detail": "high",
+                },
+            },
+            {
+                "type": "text",
+                "text": (
+                    f"[Segmentation mask overlay. Click: ({pixel_x},{pixel_y}), "
+                    f"Centroid: ({cx},{cy}), Score: {score:.3f}]"
+                ),
+            },
+        ]
+
+        return text_result, image_content
+
+    def _annotate_segmentation(
+        self,
+        color_image: np.ndarray,
+        mask: np.ndarray,
+        bbox: tuple[int, int, int, int],
+        click: tuple[int, int],
+        centroid: tuple[int, int],
+    ) -> np.ndarray:
+        """Draw segmentation annotation on the image.
+
+        - Green semi-transparent mask overlay
+        - Green contour outline
+        - Green bounding box
+        - Red crosshair at click point
+        - Blue dot at centroid
+        """
+        annotated = color_image.copy()
+
+        # Green mask overlay (semi-transparent)
+        green_overlay = annotated.copy()
+        green_overlay[mask] = [0, 200, 0]
+        cv2.addWeighted(green_overlay, 0.4, annotated, 0.6, 0, annotated)
+
+        # Contour outline
+        contours, _ = cv2.findContours(
+            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        cv2.drawContours(annotated, contours, -1, (0, 255, 0), 2)
+
+        # Bounding box
+        x1, y1, x2, y2 = bbox
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 1)
+
+        # Click crosshair (red)
+        cx, cy = click
+        cv2.drawMarker(annotated, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
+
+        # Centroid dot (blue)
+        mx, my = centroid
+        cv2.circle(annotated, (mx, my), 6, (255, 0, 0), -1)
+        cv2.circle(annotated, (mx, my), 6, (255, 255, 255), 1)
+
+        # Coordinate grid so the LLM can evaluate positions
+        annotated = self._draw_coordinate_grid(annotated)
+
+        return annotated
+
+    def _execute_goto_pixel(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Execute goto_pixel tool: pixel -> depth -> deproject -> affine -> move."""
+        pixel_x = args["pixel_x"]
+        pixel_y = args["pixel_y"]
         z_offset_mm = args.get("z_offset_mm", 50)
 
-        if self._current_scene is None:
+        if self._last_depth_frame is None:
             return {
                 "status": "error",
-                "message": "No scene available. Call describe_scene() first.",
+                "message": "No depth frame available. Call look() first.",
             }
 
-        obj = self._current_scene.get_object(object_id)
-        if obj is None:
-            available = [o.object_id for o in self._current_scene.objects]
+        # Get depth at pixel
+        depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, pixel_x, pixel_y)
+        if depth_mm is None:
             return {
                 "status": "error",
-                "message": f"Object ID {object_id} not found. Available IDs: {available}",
+                "message": f"No depth at pixel ({pixel_x}, {pixel_y}) — surface may be too close/far.",
             }
 
-        if obj.position_arm is None:
+        # Deproject to camera 3D
+        cam_3d = self.ct.deproject_pixel(pixel_x, pixel_y, depth_mm=depth_mm)
+        if cam_3d is None:
             return {
                 "status": "error",
-                "message": (
-                    f"Object {object_id} ({obj.label}) has no arm coordinates. "
-                    "Depth may be missing or calibration not loaded."
-                ),
+                "message": f"Deprojection failed at ({pixel_x}, {pixel_y}).",
             }
 
-        target_x = obj.position_arm.x
-        target_y = obj.position_arm.y
-        target_z = obj.position_arm.z + z_offset_mm
+        # Transform to arm coordinates
+        arm_3d = self.ct.camera_to_arm(cam_3d)
+        if arm_3d is None:
+            return {
+                "status": "error",
+                "message": "Camera-to-arm transform failed. Calibration may be missing.",
+            }
+
+        target_x = float(arm_3d[0])
+        target_y = float(arm_3d[1])
+        target_z = float(arm_3d[2]) + z_offset_mm
 
         ok = self.motion.move_to(target_x, target_y, target_z)
         if ok:
             return {
                 "status": "success",
-                "message": f"Moved to {obj.label} (id={object_id}) at x={target_x:.0f}, y={target_y:.0f}, z={target_z:.0f}",
+                "message": (
+                    f"Moved to pixel ({pixel_x},{pixel_y}) -> "
+                    f"arm x={target_x:.0f}, y={target_y:.0f}, z={target_z:.0f}"
+                ),
+                "pixel": {"x": pixel_x, "y": pixel_y},
+                "arm_position": {
+                    "x": round(target_x, 1),
+                    "y": round(target_y, 1),
+                    "z": round(target_z, 1),
+                },
             }
         else:
             return {
                 "status": "error",
-                "message": f"move_to failed — position ({target_x:.0f}, {target_y:.0f}, {target_z:.0f}) may be unreachable",
+                "message": (
+                    f"move_to failed — position ({target_x:.0f}, {target_y:.0f}, {target_z:.0f}) "
+                    "may be unreachable"
+                ),
             }
 
     def _execute_pose_get(self, _args: dict[str, Any]) -> dict[str, Any]:
@@ -299,30 +456,37 @@ class AgentV2:
         tool_name = tool_call.function.name
         args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
 
-        # describe_scene doesn't need confirmation
-        if tool_name == "describe_scene":
-            print("Running perception pipeline...")
-            text_result, images = self._execute_describe_scene(args)
+        # look and segment return images, no confirmation needed
+        if tool_name == "look":
+            print("Capturing camera frame...")
+            text_result, images = self._execute_look(args)
+            return text_result, images
+
+        if tool_name == "segment":
+            print(f"Segmenting at ({args.get('pixel_x')}, {args.get('pixel_y')})...")
+            text_result, images = self._execute_segment(args)
             return text_result, images
 
         # Confirmation for movement tools
-        needs_confirm = tool_name in ["goto", "move_home", "gripper_ctrl"]
+        needs_confirm = tool_name in ["goto_pixel", "move_home", "gripper_ctrl"]
         if needs_confirm and not self.confirmation.auto_confirm:
-            # Build human-readable description
-            if tool_name == "goto":
-                obj_desc = f"object_id={args['object_id']}"
-                if self._current_scene:
-                    obj = self._current_scene.get_object(args["object_id"])
-                    if obj:
-                        obj_desc = f"{obj.label} (id={args['object_id']})"
-                        if obj.position_arm:
-                            obj_desc += (
-                                f" at x={obj.position_arm.x:.0f}, "
-                                f"y={obj.position_arm.y:.0f}, "
-                                f"z={obj.position_arm.z:.0f}"
-                            )
+            if tool_name == "goto_pixel":
+                # Compute arm position for display
+                px, py = args["pixel_x"], args["pixel_y"]
                 z_off = args.get("z_offset_mm", 50)
-                action_str = f"GOTO {obj_desc} (z_offset={z_off}mm)"
+                arm_desc = ""
+                if self._last_depth_frame is not None:
+                    depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, px, py)
+                    if depth_mm is not None:
+                        cam_3d = self.ct.deproject_pixel(px, py, depth_mm=depth_mm)
+                        if cam_3d is not None:
+                            arm_3d = self.ct.camera_to_arm(cam_3d)
+                            if arm_3d is not None:
+                                arm_desc = (
+                                    f" -> arm x={arm_3d[0]:.0f}, y={arm_3d[1]:.0f}, "
+                                    f"z={float(arm_3d[2]) + z_off:.0f}"
+                                )
+                action_str = f"GOTO pixel ({px},{py}) z_offset={z_off}mm{arm_desc}"
             elif tool_name == "move_home":
                 action_str = "MOVE ARM to HOME position"
             elif tool_name == "gripper_ctrl":
@@ -348,7 +512,7 @@ class AgentV2:
                     print("Please enter 'y', 'n', or 'q'")
 
         executors = {
-            "goto": self._execute_goto,
+            "goto_pixel": self._execute_goto_pixel,
             "pose_get": self._execute_pose_get,
             "move_home": self._execute_move_home,
             "gripper_ctrl": self._execute_gripper_ctrl,
@@ -368,12 +532,12 @@ class AgentV2:
     # ── Agent loop ──────────────────────────────────────────────
 
     def process_task(self, task: str) -> str:
-        """Process a task using the object-aware agent loop."""
+        """Process a task using the vision-driven agent loop."""
         logger.info(f"Processing task: {task}")
 
         task_prompt = create_task_prompt(task)
 
-        # Build initial messages (text only — LLM will call describe_scene for vision)
+        # Build initial messages (text only — LLM will call look() for vision)
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": task_prompt},
@@ -427,7 +591,7 @@ class AgentV2:
                 result, images = self._execute_tool(tool_call)
                 print(f"Result: {result if isinstance(result, str) else json.dumps(result, indent=2)[:200]}")
 
-                # For describe_scene, result is a string; for others, it's a dict
+                # For look/segment, result is a string; for others, it's a dict
                 result_str = result if isinstance(result, str) else json.dumps(result)
 
                 messages.append({
@@ -440,51 +604,34 @@ class AgentV2:
                     pending_images = images
 
                 tool_name = tool_call.function.name
-                if tool_name in ["goto", "move_home", "gripper_ctrl"]:
+                if tool_name in ["goto_pixel", "move_home", "gripper_ctrl"]:
                     result_dict = result if isinstance(result, dict) else {}
                     if result_dict.get("status") == "success":
                         movement_executed = True
 
-            # Add images from describe_scene as a user message
+            # Add images from look/segment as a user message
             if pending_images:
                 messages.append({
                     "role": "user",
                     "content": pending_images,
                 })
 
-            # After movement, capture a fresh annotated frame for verification
+            # After movement, capture a fresh view for verification
             if movement_executed:
                 print("Capturing post-movement view...")
                 time.sleep(0.5)
-                scene, annotated, depth_image = self._run_perception()
-                scene_json = json.dumps(scene.to_dict(), indent=2)
-
-                annotated_b64 = self._encode_image(annotated)
-                depth_b64 = self._encode_image(depth_image)
+                text_result, image_content = self._execute_look({})
 
                 messages.append({
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{annotated_b64}",
-                                "detail": "high",
-                            },
-                        },
+                        *image_content,
                         {
                             "type": "text",
                             "text": (
-                                f"[Updated view after movement. Current detections:\n{scene_json}\n"
+                                "[Updated view after movement. "
                                 "Confirm task completion or continue if more actions needed.]"
                             ),
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{depth_b64}",
-                                "detail": "high",
-                            },
                         },
                     ],
                 })
@@ -498,17 +645,17 @@ class AgentV2:
         self.start()
 
         print("\n" + "=" * 60)
-        print("Agent V2 - Object-Aware Interactive Mode")
+        print("Agent V2 - Vision-Driven Interactive Mode (SAM2)")
         print("=" * 60)
         print("Commands:")
         print("  quit       - Exit the agent")
         print("  home       - Move arm to home position")
         print("  pos        - Show current arm position (ground-relative)")
         print("  calibrate  - Run calibration procedure")
-        print("  detect     - Run perception only (no LLM)")
+        print("  segment    - Interactive segment test (click to segment, no LLM)")
         print("  touch      - Touch debug (click to move arm, then reset)")
         print()
-        print("Or enter a task like: 'go to the cup'")
+        print("Or enter a task like: 'touch the cup'")
         print()
 
         try:
@@ -535,8 +682,8 @@ class AgentV2:
                     self._run_calibration()
                     continue
 
-                if task.lower() == "detect":
-                    self._run_detect_only()
+                if task.lower() in ["segment", "detect"]:
+                    self._run_segment_test()
                     continue
 
                 if task.lower() == "touch":
@@ -560,8 +707,115 @@ class AgentV2:
         finally:
             self.stop()
 
+    def _run_segment_test(self) -> None:
+        """Interactive segment test: click a point to see SAM2 segmentation.
+
+        Shows the camera image. Click anywhere to run SAM2 point-prompt
+        segmentation and see the mask overlay, centroid, and 3D arm coords.
+
+        Press 'r' to refresh the camera frame. Press 'q' to exit.
+        """
+        window_name = "Segment Test - Click to segment (R=refresh, Q=quit)"
+        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+
+        clicked_pixel: list[tuple[int, int] | None] = [None]
+
+        def mouse_callback(event, x, y, _flags, _param):
+            if event == cv2.EVENT_LBUTTONDOWN:
+                clicked_pixel[0] = (x, y)
+
+        cv2.setMouseCallback(window_name, mouse_callback)
+
+        print("\n" + "=" * 60)
+        print("SEGMENT TEST MODE")
+        print("=" * 60)
+        print("Click on the image to segment an object at that point.")
+        print("Press 'r' to refresh the camera frame.")
+        print("Press 'q' to exit.\n")
+
+        # Capture and encode initial frame
+        print("Capturing frame and encoding for SAM2...")
+        color_image, depth_image, depth_frame = self._capture_aligned_frames()
+        encode_time = self.sam2.set_image(color_image)
+        print(f"SAM2 image encoded in {encode_time:.1f}s")
+
+        display = color_image.copy()
+        cv2.putText(
+            display, "Click to segment | R=refresh | Q=quit",
+            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
+        )
+
+        try:
+            while True:
+                cv2.imshow(window_name, display)
+                key = cv2.waitKey(30) & 0xFF
+
+                if key == ord("q"):
+                    break
+
+                if key == ord("r"):
+                    print("Refreshing frame...")
+                    color_image, depth_image, depth_frame = self._capture_aligned_frames()
+                    encode_time = self.sam2.set_image(color_image)
+                    print(f"SAM2 image encoded in {encode_time:.1f}s")
+                    display = color_image.copy()
+                    cv2.putText(
+                        display, "Click to segment | R=refresh | Q=quit",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
+                    )
+                    clicked_pixel[0] = None
+                    continue
+
+                if clicked_pixel[0] is None:
+                    continue
+
+                px, py = clicked_pixel[0]
+                clicked_pixel[0] = None
+
+                # Run segmentation
+                print(f"Segmenting at ({px}, {py})...")
+                t0 = time.time()
+                mask, score, bbox = self.sam2.segment_point(px, py)
+                seg_time = time.time() - t0
+                cx, cy = self.sam2.mask_centroid(mask)
+
+                # Get 3D coords
+                arm_str = "no calibration"
+                depth_mm = self.ct.get_depth_at_pixel(depth_frame, cx, cy)
+                if depth_mm is not None:
+                    cam_3d = self.ct.deproject_pixel(cx, cy, depth_mm=depth_mm)
+                    if cam_3d is not None:
+                        arm_3d = self.ct.camera_to_arm(cam_3d)
+                        if arm_3d is not None:
+                            arm_str = f"arm=({arm_3d[0]:.0f}, {arm_3d[1]:.0f}, {arm_3d[2]:.0f})"
+
+                print(
+                    f"  Score: {score:.3f} | Centroid: ({cx},{cy}) | "
+                    f"Area: {int(mask.sum())}px | {arm_str} | {seg_time:.2f}s"
+                )
+
+                # Draw annotation
+                display = self._annotate_segmentation(
+                    color_image, mask, bbox, (px, py), (cx, cy)
+                )
+                cv2.putText(
+                    display,
+                    f"Score={score:.3f} Centroid=({cx},{cy}) {arm_str}",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                )
+                cv2.putText(
+                    display, "Click to segment | R=refresh | Q=quit",
+                    (10, display.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                )
+
+        finally:
+            cv2.destroyAllWindows()
+            print("Segment test ended.")
+
     def _run_calibration(self) -> None:
         """Run the interactive calibration procedure."""
+        from .calibration import CalibrationProcedure
+
         try:
             proc = CalibrationProcedure(self.camera, self.motion, self.ct)
             R, t, rmse = proc.run(save_path=self._calibration_path)
@@ -571,18 +825,6 @@ class AgentV2:
             print("Calibration loaded into coordinate transform.")
         except Exception as e:
             print(f"Calibration failed: {e}")
-
-    def _run_detect_only(self) -> None:
-        """Run perception pipeline and print results (no LLM)."""
-        print("Running perception pipeline...")
-        scene, annotated, _depth = self._run_perception()
-        print(json.dumps(scene.to_dict(), indent=2))
-
-        # Show annotated image in OpenCV window
-        cv2.imshow("Detections", annotated)
-        print("Press any key in the image window to close.")
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
 
     def _run_touch_debug(self) -> None:
         """Interactive touch debug: click a point, arm moves there, then resets.
