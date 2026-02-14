@@ -1,10 +1,11 @@
-import argparse
+import curses
 import glob
-import math
 import sys
 import time
+from typing import Callable, NewType
 
 from roarm_sdk.roarm import roarm
+
 
 SERIAL_GLOB_PATTERNS = [
     "/dev/cu.usbserial-*",
@@ -13,16 +14,60 @@ SERIAL_GLOB_PATTERNS = [
     "/dev/ttyACM*",
 ]
 
-MOVE_SPEED = 600
-MOVE_ACC = 100
-# Circle in the Y-Z plane (around the X axis)
-CIRCLE_X = 250  # fixed X distance from base
-CIRCLE_CENTER_Y = 0  # center Y
-CIRCLE_CENTER_Z = 200  # center Z
-CIRCLE_RADIUS = 80
-CIRCLE_POINTS = 72
-CIRCLE_T = 0
-STEP_DELAY = 0.01
+speed: float = 25
+turning: float = 10
+
+Pose = NewType("Pose", tuple[float, float, float, float])
+clip: Callable[[float, float, float], float] = lambda x, a, b: max(min(x, b), a)
+
+
+def move_up(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x, y, z + speed, t))
+
+
+def move_down(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x, y, z - speed, t))
+
+
+def move_left(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x, y + speed, z, t))
+
+
+def move_right(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x, y - speed, z, t))
+
+
+def move_forward(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x + speed, y, z, t))
+
+
+def move_backward(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x - speed, y, z, t))
+
+
+def open(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x, y, z, t + turning))
+
+
+def close(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    return Pose((x, y, z, t - turning))
+
+
+def correct(pose: Pose) -> Pose:
+    x, y, z, t = pose
+    x = clip(x, -490, 490)
+    y = clip(y, -490, 490)
+    z = clip(z, 0, 490)
+    t = clip(t, 0, 90)
+    return Pose((x, y, z, t))
 
 
 def detect_serial_port():
@@ -40,32 +85,9 @@ def detect_serial_port():
         return None
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Make RoArm-M2 draw a circle around the X axis."
-    )
-
-    _ = parser.add_argument(
-        "--port", type=str, default=None, help="Serial port (auto-detected if omitted)"
-    )
-    _ = parser.add_argument(
-        "--loops", type=int, default=2, help="Number of circles (default: 2)"
-    )
-    _ = parser.add_argument(
-        "--radius",
-        type=float,
-        default=CIRCLE_RADIUS,
-        help="Circle radius in mm (default: 80)",
-    )
-    _ = parser.add_argument(
-        "--speed",
-        type=int,
-        default=MOVE_SPEED,
-        help="Movement speed, 1-4096 (default: 600)",
-    )
-
-    args = parser.parse_args()
-    port = args.port or detect_serial_port()
+def main(stdscr):
+    stdscr.nodelay(True)
+    port = detect_serial_port()
 
     if port is None:
         print("Error: No USB serial device found. Connect the arm or use --port.")
@@ -73,36 +95,49 @@ def main():
 
     print(f"Connecting to RoArm-M2 on {port}...")
     arm = roarm(roarm_type="roarm_m2", port=port, baudrate=115200)
+    arm.echo_set(0)
+    arm.torque_set(1)
 
     print("Moving to home position...")
     arm.move_init()
-    time.sleep(2)
-
-    # Move to start of circle (top of circle: Y=0, Z=center+radius)
-    start_y = CIRCLE_CENTER_Y
-    start_z = CIRCLE_CENTER_Z + args.radius
-    print(f"Moving to circle start (x={CIRCLE_X}, y={start_y}, z={start_z:.0f})...")
-    arm.pose_ctrl([CIRCLE_X, start_y, start_z, CIRCLE_T])
     time.sleep(1)
 
-    print(f"Drawing {args.loops} circle(s) around X axis, radius={args.radius}mm...")
+    pose = Pose((250, 0, 250, 0))
+    delay: float = 0.05
+
     try:
-        for loop in range(args.loops):
-            print(f"  Circle {loop + 1}/{args.loops}")
-            for i in range(1, CIRCLE_POINTS + 1):
-                angle = 2 * math.pi * i / CIRCLE_POINTS
-                y = CIRCLE_CENTER_Y + args.radius * math.sin(angle)
-                z = CIRCLE_CENTER_Z + args.radius * math.cos(angle)
-                arm.pose_ctrl([CIRCLE_X, y, z, CIRCLE_T])
-                time.sleep(STEP_DELAY)
+        while True:
+            x, y, z, t = pose
+            arm.pose_ctrl([x, y, z, t])
+            time.sleep(delay)
+
+            try:
+                key = stdscr.getkey()
+            except curses.error:
+                continue
+
+            if key == "w":
+                pose = move_up(pose)
+            if key == "a":
+                pose = move_left(pose)
+            if key == "s":
+                pose = move_down(pose)
+            if key == "d":
+                pose = move_right(pose)
+            if key == "q":
+                pose = move_backward(pose)
+            if key == "e":
+                pose = move_forward(pose)
+            if key == "r":
+                pose = open(pose)
+            if key == "f":
+                pose = close(pose)
+
+            pose = correct(pose)
+
     except KeyboardInterrupt:
-        print("\nInterrupted.")
-
-    print("Returning to home position...")
-    arm.move_init()
-    time.sleep(2)
-    print("Done.")
+        arm.move_init()
+        print("Keyboard interrupt")
 
 
-if __name__ == "__main__":
-    main()
+curses.wrapper(main)

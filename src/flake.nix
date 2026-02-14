@@ -47,6 +47,7 @@
         pythonEnv = python.withPackages (
           ps: [
             ps.mypy
+            ps.keyboard
             roarm_sdk
           ]
         );
