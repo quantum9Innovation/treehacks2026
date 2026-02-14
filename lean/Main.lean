@@ -1,19 +1,9 @@
 import Lean
 import Math
 import Types
-open Lean Json System
+import Trajectories
 
-def π : Float := 3.1415926536
-def limit : Float := 490
-def floor : Millimeters := 200
-def maxGrip : Float := 90
-def radius : Millimeters := 300
-def nSamples : Nat := 50
-def parametricBounds : Bounds := {min := 0, max := 2 * π}
-def tSamples : List Float := Math.linspace parametricBounds nSamples
-def lemniscatePlane : Traceable :=
-  Math.lemniscate radius
-def planeSamples : List Point2D := tSamples.map lemniscatePlane
+open Lean Json System
 
 -- Subtypes
 def CoordinateX : Type := {x : Float // (-limit ≤ x && x ≤ limit) = true}
@@ -32,6 +22,9 @@ def cX (f : Millimeters) (h : (-limit ≤ f && f ≤ limit) = true := by native_
 def cY (f : Millimeters) (h : (-limit ≤ f && f ≤ limit) = true := by native_decide) : CoordinateY := ⟨f, h⟩
 def cZ (f : Millimeters) (h : (0.0 ≤ f && f ≤ limit) = true := by native_decide) : CoordinateZ := ⟨f, h⟩
 def gA (f : Degrees) (h : (0.0 ≤ f && f ≤ maxGrip) = true := by native_decide) : GripAngle := ⟨f, h⟩
+
+def cX_safe (f : Float) : Option CoordinateX :=
+  if h : (-limit ≤ f && f ≤ limit) then some ⟨f, h⟩ else none
 
 def cY_safe (f : Float) : Option CoordinateY :=
   if h : (-limit ≤ f && f ≤ limit) then some ⟨f, h⟩ else none
@@ -52,14 +45,22 @@ def writeTrajectory (path : FilePath) (trajectory : List Pose) : IO Unit := do
   let jsonObj := Json.mkObj [("trajectory", Json.arr (trajectoryJson.toArray))]
   IO.FS.writeFile path (jsonObj.pretty 4)
 
-def createTrajectory (planeFigure : List Point2D) (slice : CoordinateX) : List Pose :=
-  planeFigure.filterMap fun (x, y) => do
-    let yCoord ← cY_safe x
-    let zCoord ← cZ_safe (y + floor)
+def createPlaneTrajectory (planeFigure : List Point2D) (slice : CoordinateX) : List Pose :=
+  planeFigure.filterMap fun p => do
+    let yCoord ← cY_safe p.x
+    let zCoord ← cZ_safe (p.y + floor)
     let angle  ← gA_safe 0.0
     return (slice, yCoord, zCoord, angle)
+    
+def createCurveTrajectory (pointSamples : List Point3D) : List Pose :=
+  pointSamples.filterMap fun p => do
+    let xCoord ← cX_safe p.x
+    let yCoord ← cY_safe p.y
+    let zCoord ← cZ_safe (p.z + floor)
+    let angle  ← gA_safe 0.0
+    return (xCoord, yCoord, zCoord, angle)
 
-def trajectory : List Pose := createTrajectory planeSamples xPlane
+def trajectory : List Pose := createCurveTrajectory Lorenz.pointSamples
 
 def main : IO Unit := do
   writeTrajectory "../control/data.json" trajectory

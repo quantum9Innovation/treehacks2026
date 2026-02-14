@@ -16,7 +16,7 @@ SERIAL_GLOB_PATTERNS = [
     "/dev/ttyACM*",
 ]
 
-speed: float = 25
+speed: float = 50
 turning: float = 10
 skip: bool = False
 repeat: bool = True
@@ -97,7 +97,8 @@ def detect_serial_port():
 
 def main(stdscr):
     stdscr.nodelay(True)
-    ports = ["/dev/ttyUSB0", "/dev/ttyUSB1"]
+    # ports = ["/dev/ttyUSB0", "/dev/ttyUSB1"]
+    ports = [detect_serial_port()]
 
     if len(ports) == 0:
         print("Error: No USB serial device found. Connect the arm or use --port.")
@@ -116,7 +117,7 @@ def main(stdscr):
         time.sleep(1)
 
     pose = Pose((250, 0, 250, 0))
-    delay: float = 0.05
+    delay: float = 0.02
 
     try:
         if not skip:
