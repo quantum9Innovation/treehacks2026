@@ -12,7 +12,7 @@ export function StepSizeSelector() {
         value={state.stepSize.toString()}
         onValueChange={(v) => dispatch({ type: 'SET_STEP_SIZE', payload: Number(v) })}
       >
-        <SelectTrigger className="h-7 w-20 text-xs">
+        <SelectTrigger className="h-7 w-28 text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

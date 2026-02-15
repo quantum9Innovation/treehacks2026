@@ -18,6 +18,20 @@ router = APIRouter(prefix="/api/camera", tags=["camera"])
 _pcs: set[RTCPeerConnection] = set()
 
 
+async def _sweep_stale_pcs():
+    """Close and remove peer connections in failed/disconnected/closed state."""
+    stale = {
+        pc for pc in _pcs
+        if pc.connectionState in ("failed", "closed", "disconnected")
+    }
+    for pc in stale:
+        try:
+            await pc.close()
+        except Exception:
+            pass
+        _pcs.discard(pc)
+
+
 class WebRTCOffer(BaseModel):
     sdp: str
     type: str
@@ -38,6 +52,9 @@ class SnapshotResponse(BaseModel):
 @router.post("/webrtc/offer", response_model=WebRTCAnswer)
 async def webrtc_offer(body: WebRTCOffer, request: Request):
     """WebRTC signaling: receive SDP offer, return SDP answer."""
+    # Sweep stale connections before creating new ones
+    await _sweep_stale_pcs()
+
     hw: HardwareManager = request.app.state.hardware
     relay = get_relay()
 

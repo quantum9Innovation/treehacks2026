@@ -50,9 +50,30 @@ class GripperResponse(BaseModel):
     state: str
 
 
+class ProbeGroundResponse(BaseModel):
+    status: str
+    message: str
+
+
 class ArmStatusResponse(BaseModel):
     connected: bool
     ground_calibrated: bool
+    active_device: str | None = None
+
+
+class DevicesResponse(BaseModel):
+    devices: list[str]
+    active: str | None = None
+
+
+class ConnectRequest(BaseModel):
+    device: str
+
+
+class ConnectResponse(BaseModel):
+    status: str
+    device: str
+    message: str
 
 
 # --- Endpoints ---
@@ -60,6 +81,39 @@ class ArmStatusResponse(BaseModel):
 
 def _get_hw_bus(request: Request) -> tuple[HardwareManager, EventBus]:
     return request.app.state.hardware, request.app.state.event_bus
+
+
+@router.get("/devices", response_model=DevicesResponse)
+async def list_devices(request: Request):
+    """List available arm devices."""
+    hw, _ = _get_hw_bus(request)
+    return DevicesResponse(devices=hw.arm_devices, active=hw.active_arm_device)
+
+
+@router.post("/connect", response_model=ConnectResponse)
+async def connect_arm(body: ConnectRequest, request: Request):
+    """Connect to a specific arm device."""
+    hw, bus = _get_hw_bus(request)
+    if body.device not in hw.arm_devices:
+        raise HTTPException(400, f"Unknown device: {body.device}. Available: {hw.arm_devices}")
+    try:
+        await hw.connect_arm(body.device)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to connect to {body.device}: {e}")
+    await bus.publish("arm.connected", {"device": body.device})
+    return ConnectResponse(status="success", device=body.device, message=f"Connected to {body.device}")
+
+
+@router.post("/disconnect", response_model=ConnectResponse)
+async def disconnect_arm(request: Request):
+    """Disconnect the current arm."""
+    hw, bus = _get_hw_bus(request)
+    prev = hw.active_arm_device
+    if prev is None:
+        raise HTTPException(400, "No arm connected")
+    await hw.disconnect_arm()
+    await bus.publish("arm.disconnected", {"device": prev})
+    return ConnectResponse(status="success", device=prev, message=f"Disconnected from {prev}")
 
 
 @router.get("/status", response_model=ArmStatusResponse)
@@ -70,7 +124,24 @@ async def arm_status(request: Request):
         ground_calibrated=hw.motion is not None and hw.motion._ground_z is not None
         if hw.motion
         else False,
+        active_device=hw.active_arm_device,
     )
+
+
+@router.post("/probe-ground", response_model=ProbeGroundResponse)
+async def probe_ground(request: Request):
+    """Probe ground to calibrate Z=0. Must be done before ground-relative moves."""
+    hw, bus = _get_hw_bus(request)
+    if hw.motion is None:
+        raise HTTPException(503, "Arm not connected")
+
+    async with hw.arm_lock:
+        await hw.run_in_hw_thread(hw.motion.probe_ground)
+        await hw.run_in_hw_thread(hw.motion.home)
+        await asyncio.sleep(1)
+        await bus.publish("arm.ground_calibrated", {"status": True, "device": hw.active_arm_device})
+
+    return ProbeGroundResponse(status="success", message="Ground probed and Z=0 calibrated")
 
 
 @router.get("/pose", response_model=PoseResponse)
@@ -138,16 +209,34 @@ async def move_home(request: Request):
 
 @router.post("/stop", response_model=MoveResponse)
 async def emergency_stop(request: Request):
-    """Emergency stop: read current position and hold."""
+    """Emergency stop: immediately command arm to hold current joint positions.
+
+    Bypasses the hw executor thread so it works even while a move is in progress.
+    """
     hw, bus = _get_hw_bus(request)
     if hw.motion is None:
         raise HTTPException(503, "Arm not connected")
 
-    # Get current position and command arm to stay there
-    x, y, z = await hw.run_in_hw_thread(hw.motion.get_pose)
-    position = PoseResponse(x=round(x, 1), y=round(y, 1), z=round(z, 1))
+    # Run directly in a new thread to bypass the busy hw executor
+    loop = asyncio.get_event_loop()
+    position = await loop.run_in_executor(None, _estop_sync, hw)
     await bus.publish("arm.position", position.model_dump())
     return MoveResponse(status="success", message="Emergency stop — holding position", position=position)
+
+
+def _estop_sync(hw: HardwareManager) -> PoseResponse:
+    """Read current joints and re-command them to freeze the arm (runs in thread)."""
+    from motion_controller.motion import fk
+
+    arm = hw.motion.arm
+    fb = arm.feedback_get()
+    # Command arm to hold at its current joint angles, interrupting any in-progress move
+    arm.joints_radian_ctrl(radians=[fb[3], fb[4], fb[5], fb[6]], speed=4000, acc=200)
+    # Compute ground-relative position from joint angles
+    x, y, z = fk(fb[3], fb[4], fb[5])
+    if hw.motion._ground_z is not None:
+        z = z - hw.motion._ground_z
+    return PoseResponse(x=round(x, 1), y=round(y, 1), z=round(z, 1))
 
 
 @router.post("/gripper", response_model=GripperResponse)

@@ -48,6 +48,26 @@ export function useWebSocket(onMessage?: (msg: WSMessage) => void) {
               payload: msg.payload.angle as number,
             })
             break
+          case 'arm.connected':
+            dispatch({
+              type: 'SET_ARM_CONNECTED',
+              payload: { connected: true, device: msg.payload.device as string },
+            })
+            break
+          case 'arm.disconnected':
+            dispatch({
+              type: 'SET_ARM_CONNECTED',
+              payload: { connected: false, device: null },
+            })
+            break
+          case 'arm.ground_calibrated':
+            if (msg.payload.device) {
+              dispatch({
+                type: 'SET_GROUND_CALIBRATED',
+                payload: msg.payload.device as string,
+              })
+            }
+            break
           case 'agent.state_changed':
             dispatch({
               type: 'SET_AGENT_STATE',

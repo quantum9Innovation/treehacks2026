@@ -40,7 +40,7 @@ class EventBus:
             dead: set[WebSocket] = set()
             for ws in self._subscribers:
                 try:
-                    await ws.send_text(message)
+                    await asyncio.wait_for(ws.send_text(message), timeout=5.0)
                 except Exception:
                     dead.add(ws)
             self._subscribers -= dead

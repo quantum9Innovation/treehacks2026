@@ -6,6 +6,8 @@ import { GripperControl } from '@/components/control/gripper-control'
 import { PositionReadout } from '@/components/control/position-readout'
 import { StepSizeSelector } from '@/components/control/step-size-selector'
 import { EmergencyStop } from '@/components/control/emergency-stop'
+import { ProbeGround } from '@/components/control/probe-ground'
+import { ArmSelector } from '@/components/control/arm-selector'
 import { useKeyboardControls } from '@/lib/hooks/use-keyboard-controls'
 import { useWebSocket } from '@/lib/hooks/use-websocket'
 import { useState } from 'react'
@@ -24,7 +26,7 @@ function ControlPage() {
   } | null>(null)
 
   return (
-    <div className="flex h-full gap-4 p-4">
+    <div className="flex h-full gap-2 p-2">
       {/* Camera panel */}
       <div className="flex-[2] min-w-0">
         <CameraFeed
@@ -34,46 +36,56 @@ function ControlPage() {
       </div>
 
       {/* Controls panel */}
-      <div className="flex w-72 flex-col gap-3">
+      <div className="flex w-64 flex-col gap-1.5">
         <Card>
-          <CardHeader className="py-2 px-3">
-            <CardTitle className="text-sm">Position</CardTitle>
+          <CardHeader className="py-1.5 px-2">
+            <CardTitle className="text-xs">Arm</CardTitle>
           </CardHeader>
-          <CardContent className="px-3 pb-3">
+          <CardContent className="px-2 pb-2">
+            <ArmSelector />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="py-1.5 px-2">
+            <CardTitle className="text-xs">Position</CardTitle>
+          </CardHeader>
+          <CardContent className="px-2 pb-2">
             <PositionReadout />
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="py-2 px-3">
+          <CardHeader className="py-1.5 px-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm">Movement</CardTitle>
+              <CardTitle className="text-xs">Movement</CardTitle>
               <StepSizeSelector />
             </div>
           </CardHeader>
-          <CardContent className="px-3 pb-3">
+          <CardContent className="px-2 pb-2">
             <MovementGrid />
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="py-2 px-3">
-            <CardTitle className="text-sm">Gripper</CardTitle>
+          <CardHeader className="py-1.5 px-2">
+            <CardTitle className="text-xs">Gripper</CardTitle>
           </CardHeader>
-          <CardContent className="px-3 pb-3">
+          <CardContent className="px-2 pb-2">
             <GripperControl />
           </CardContent>
         </Card>
 
+        <ProbeGround />
         <EmergencyStop />
 
         {/* Debug info */}
         {(clickInfo || segResult) && (
           <Card>
-            <CardHeader className="py-2 px-3">
-              <CardTitle className="text-sm">Debug</CardTitle>
+            <CardHeader className="py-1.5 px-2">
+              <CardTitle className="text-xs">Debug</CardTitle>
             </CardHeader>
-            <CardContent className="px-3 pb-3 text-xs font-mono space-y-1">
+            <CardContent className="px-2 pb-2 text-xs font-mono space-y-0.5">
               {clickInfo && (
                 <p>
                   Click: ({clickInfo.pixel_x}, {clickInfo.pixel_y})

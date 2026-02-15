@@ -27,14 +27,22 @@ async function get<T = unknown>(path: string): Promise<T> {
 // --- Arm ---
 
 export const armApi = {
+  devices: () =>
+    get<{ devices: string[]; active: string | null }>('/api/arm/devices'),
+  connect: (device: string) =>
+    post<{ status: string; device: string; message: string }>('/api/arm/connect', { device }),
+  disconnect: () =>
+    post<{ status: string; device: string; message: string }>('/api/arm/disconnect'),
   pose: () => get<{ x: number; y: number; z: number }>('/api/arm/pose'),
   move: (x: number, y: number, z: number) => post('/api/arm/move', { x, y, z }),
   home: () => post('/api/arm/home'),
   stop: () => post('/api/arm/stop'),
+  probeGround: () => post<{ status: string; message: string }>('/api/arm/probe-ground'),
   gripper: (angle: number) => post('/api/arm/gripper', { angle }),
   gotoPixel: (pixel_x: number, pixel_y: number, z_offset_mm = 50) =>
     post('/api/arm/goto-pixel', { pixel_x, pixel_y, z_offset_mm }),
-  status: () => get<{ connected: boolean; ground_calibrated: boolean }>('/api/arm/status'),
+  status: () =>
+    get<{ connected: boolean; ground_calibrated: boolean; active_device: string | null }>('/api/arm/status'),
 }
 
 // --- Vision ---

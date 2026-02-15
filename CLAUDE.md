@@ -22,11 +22,11 @@ uv run vlm-agent                   # Run legacy V1 agent
 uv add <package>                   # Add dependency
 ```
 
-**Linting/formatting** (via Nix pre-commit hooks, installed by `nix develop`):
+**Linting/formatting**:
 ```bash
-ruff check .          # Lint
-ruff format .         # Auto-format
-pyright               # Type check
+uv run ruff check .          # Lint
+uv run ruff format .         # Auto-format
+uv run pyright               # Type check
 ```
 
 Ruff ignores: F403, F405, E731. Pyright ignores missing imports.
@@ -63,7 +63,7 @@ Key classes/methods in `motion_controller/motion.py`:
 
 ### Hardware Setup
 
-- **Arm model:** RoArm M2 (4-DOF)
+- **Arm model:** RoArm M2 (4-DOF), 4 arms on `/dev/ARM0`–`/dev/ARM3`
 - **Connection:** USB serial, 115200 baud
 - **SDK import:** `from roarm_sdk.roarm import roarm`
 - **Camera**: Intel RealSense D435 at 640x480
@@ -125,11 +125,54 @@ Radians: `[0, 0, 1.5708, 0]` — use `arm.move_init()` (slow, speed=100) or `arm
 - **Torque collision threshold**: `abs(current_torque - previous_torque) > 50` on any joint indicates likely contact.
 - **Z axis is inverted** in default arm config (designed for inverted mounting).
 
+### Web Server (`server/`)
+
+FastAPI backend serving REST + WebSocket APIs for the control panel.
+
+- **Entry point**: `server/app.py` → `create_app()` with `lifespan` context manager
+- **Config**: `server/config.py` — `Settings` class using `pydantic_settings`, reads `.env`
+- **Hardware manager**: `server/hardware.py` — `HardwareManager` singleton owns camera, vision, arm, coordinate transform. Arm connection is deferred (not connected at boot).
+- **Thread pools**: `_hw_executor` (single-thread, serializes arm/camera access), `_vision_executor` (single-thread, vision inference)
+- **Arm lock**: `hw.arm_lock` (asyncio.Lock) serializes all arm movement commands
+- **Routers**: `server/routers/` — `arm.py`, `camera.py`, `vision.py`, `agent.py`, `calibration.py`
+- **Event bus**: `server/events.py` — `EventBus` publishes events over WebSocket
+
+#### Arm startup behavior
+- **Ground probe is NOT automatic** — server boots without probing ground. The arm just does `move_init()` on connect.
+- Ground probe is triggered manually via `POST /api/arm/probe-ground` (button in control panel).
+- Arm connection is also manual via the control panel (multi-device support: `/dev/ARM0`–`/dev/ARM3`).
+
+#### Key arm endpoints (`/api/arm/`)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/devices` | List available arms + active device |
+| POST | `/connect` | Connect to arm `{"device": "/dev/ARM0"}` |
+| POST | `/disconnect` | Disconnect current arm |
+| GET | `/status` | Connection + ground calibration + active device |
+| POST | `/probe-ground` | Probe ground to calibrate Z=0 |
+| GET | `/pose` | Current ground-relative position |
+| POST | `/move` | Move to (x, y, z) |
+| POST | `/home` | Return to home position |
+| POST | `/stop` | Emergency stop |
+| POST | `/gripper` | Set gripper angle (0-90°) |
+| POST | `/goto-pixel` | Move to 3D position from pixel coords |
+
+### Web Frontend (`web/`)
+
+React + TypeScript SPA (TanStack Router, Tailwind, shadcn/ui).
+
+- **State**: `web/src/lib/robot-context.tsx` — `useReducer`-based global state (`useRobot()` hook)
+- **API client**: `web/src/lib/api.ts` — typed wrappers around `fetch` (`armApi`, `visionApi`, `agentApi`, `calibrationApi`)
+- **WebSocket**: `web/src/lib/hooks/use-websocket.ts` — auto-reconnecting WS that dispatches events to global state
+- **Routes**: `web/src/routes/` — `index.tsx` (control page), `agent.tsx`, `calibration.tsx`
+- **Control components**: `web/src/components/control/` — `movement-grid`, `gripper-control`, `position-readout`, `probe-ground`, `emergency-stop`, `step-size-selector`
+
 ## Environment Setup
 
 Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY` and `HELICONE_API_KEY`. Python 3.12+ required. Uses `uv` as package manager with `hatchling` build backend.
 
 ## Bash Guidelines
 
+- **Always use `uv run` to execute Python and project commands** — never use bare `python`, `ruff`, `pyright`, etc.
 - Do not pipe output through `head`, `tail`, `less`, or `more` — causes buffering issues
 - Use command-specific flags to limit output (e.g., `git log -n 10` not `git log | head -10`)

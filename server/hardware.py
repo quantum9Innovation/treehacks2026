@@ -30,7 +30,7 @@ class HardwareManager:
 
     def __init__(
         self,
-        arm_port: str | None = None,
+        arm_devices: list[str] | None = None,
         sam2_model: str = "tiny",
         sam2_device: str = "auto",
         calibration_path: str = "agent_v2/calibration_data.json",
@@ -39,7 +39,9 @@ class HardwareManager:
         enable_gemini_vision: bool = True,
         google_api_key: str = "",
     ):
-        self._arm_port = arm_port
+        self._arm_devices = arm_devices or [
+            "/dev/ARM0", "/dev/ARM1", "/dev/ARM2", "/dev/ARM3"
+        ]
         self._sam2_model = sam2_model
         self._sam2_device = sam2_device
         self._calibration_path = calibration_path
@@ -53,6 +55,7 @@ class HardwareManager:
         self.sam2 = None
         self.ct = None
         self.gemini_vision = None
+        self.active_arm_device: str | None = None
 
         self._latest_frame: FrameBundle | None = None
         self._capture_task: asyncio.Task | None = None
@@ -65,8 +68,17 @@ class HardwareManager:
         self.vision_color: np.ndarray | None = None
         self.vision_depth_frame = None
 
+    @property
+    def arm_devices(self) -> list[str]:
+        return list(self._arm_devices)
+
+    def clear_vision_cache(self):
+        """Release cached vision frames to free memory."""
+        self.vision_color = None
+        self.vision_depth_frame = None
+
     async def start(self):
-        """Initialize all hardware."""
+        """Initialize all hardware (camera, vision). Arm is connected separately via connect_arm."""
         loop = asyncio.get_event_loop()
 
         if self._mock:
@@ -79,12 +91,11 @@ class HardwareManager:
         self._started = True
 
     def _init_hardware(self):
-        """Initialize hardware (runs in thread)."""
+        """Initialize camera and vision (runs in thread). Arm is deferred."""
         from pathlib import Path
 
         from agent.camera import RealSenseCamera
         from agent_v2.coordinate_transform import CoordinateTransform
-        from motion_controller.motion import Motion
 
         logger.info("Initializing camera...")
         self.camera = RealSenseCamera()
@@ -114,17 +125,53 @@ class HardwareManager:
         )
         self.ct.set_intrinsics_from_camera(self.camera)
 
-        logger.info("Initializing motion controller...")
-        self.motion = Motion(port=self._arm_port, inverted=True)
+        logger.info("Hardware initialization complete (no arm connected yet)")
 
-        logger.info("Probing ground...")
-        self.motion.probe_ground()
+    def _connect_arm_sync(self, device: str):
+        """Connect to an arm device (runs in thread)."""
+        from motion_controller.motion import Motion
 
-        logger.info("Moving to home...")
-        self.motion.home()
+        # Disconnect existing arm if any
+        if self.motion is not None:
+            try:
+                self.motion.home()
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error homing previous arm: {e}")
+            self.motion = None
+            self.active_arm_device = None
+
+        logger.info(f"Connecting to arm on {device}...")
+        self.motion = Motion(port=device, inverted=True)
+        self.active_arm_device = device
+
+        logger.info("Moving to home (skipping ground probe — use control panel)...")
+        self.motion.arm.move_init()
         time.sleep(1)
 
-        logger.info("Hardware initialization complete")
+        logger.info(f"Arm connected on {device}")
+
+    async def connect_arm(self, device: str):
+        """Connect to a specific arm device."""
+        async with self.arm_lock:
+            await self.run_in_hw_thread(self._connect_arm_sync, device)
+
+    def _disconnect_arm_sync(self):
+        """Disconnect the current arm (runs in thread)."""
+        if self.motion is not None:
+            try:
+                self.motion.home()
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error homing arm: {e}")
+            self.motion = None
+            self.active_arm_device = None
+            logger.info("Arm disconnected")
+
+    async def disconnect_arm(self):
+        """Disconnect the current arm."""
+        async with self.arm_lock:
+            await self.run_in_hw_thread(self._disconnect_arm_sync)
 
     async def _capture_loop(self):
         """Continuously capture frames at ~30fps."""
@@ -208,6 +255,10 @@ class HardwareManager:
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(_hw_executor, self._shutdown_sync)
+
+        # Shut down thread pools so their non-daemon threads don't block exit
+        _hw_executor.shutdown(wait=False)
+        _vision_executor.shutdown(wait=False)
 
     def _shutdown_sync(self):
         if self.motion:

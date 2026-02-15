@@ -23,6 +23,8 @@ export function useKeyboardControls(enabled: boolean) {
     if (!enabled) return
 
     const handler = (e: KeyboardEvent) => {
+      // Skip repeats (key held down) to avoid spamming API
+      if (e.repeat) return
       // Skip if typing in an input
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
@@ -60,10 +62,7 @@ export function useKeyboardControls(enabled: boolean) {
         case 'h':
           postArm('home')
           break
-        case ' ':
-          e.preventDefault()
-          postArm('stop')
-          break
+        // Space e-stop is handled globally by useEstop (in root layout)
       }
     }
 

@@ -18,6 +18,9 @@ logger = logging.getLogger("server.agent_wrapper")
 GRIPPER_SPEED = 100
 GRIPPER_ACC = 50
 
+# Prune image messages when more than this many exist in the conversation
+_MAX_IMAGE_MESSAGES = 4
+
 # Tools that need user confirmation before execution
 CONFIRM_TOOLS = {
     "goto_pixel", "move_home", "gripper_ctrl",
@@ -103,6 +106,7 @@ class WebAgentV3:
                 "error", {"code": "agent_error", "message": str(e)}
             )
         finally:
+            self._hw.clear_vision_cache()
             self._state = "idle"
             self._current_task = None
             await self._bus.publish(
@@ -155,6 +159,27 @@ class WebAgentV3:
         loop = asyncio.get_event_loop()
         self._pending_confirmation = loop.create_future()
         return await self._pending_confirmation
+
+    # ── Message pruning ────────────────────────────────────────
+
+    def _prune_image_messages(self, messages: list) -> None:
+        """Replace old image messages with text summaries to cap memory."""
+        image_indices = self.provider.find_image_message_indices(messages)
+        if len(image_indices) <= _MAX_IMAGE_MESSAGES:
+            return
+
+        # Keep the most recent _MAX_IMAGE_MESSAGES, rewrite the rest
+        to_rewrite = image_indices[: -_MAX_IMAGE_MESSAGES]
+        for idx in to_rewrite:
+            summary = None
+            for j in range(idx + 1, len(messages)):
+                text = self.provider.extract_assistant_text(messages, j)
+                if text:
+                    summary = text[:500] + ("..." if len(text) > 500 else "")
+                    break
+            if summary is None:
+                summary = "Frame was captured but no observation was recorded."
+            self.provider.replace_images_with_text(messages, idx, summary)
 
     # ── Frame capture ──────────────────────────────────────────
 
@@ -272,9 +297,10 @@ class WebAgentV3:
         else:
             text_result = "Camera frame captured (640x480). Ready for detect() queries."
 
-        # Draw grid on copy, encode
+        # Draw grid on copy, encode, then free numpy arrays
         color_with_grid = self._draw_coordinate_grid(color_image)
         color_jpeg = self._encode_image_bytes(color_with_grid)
+        del color_with_grid
         depth_jpeg = self._encode_image_bytes(depth_image)
 
         # Provider-agnostic image blocks
@@ -349,6 +375,7 @@ class WebAgentV3:
             self._hw.vision_color, mask, bbox_px, (cx, cy), label
         )
         annotated_jpeg = self._encode_image_bytes(annotated)
+        del annotated, mask
 
         image_blocks = [
             {"type": "image", "data": annotated_jpeg, "mime_type": "image/jpeg"},
@@ -409,6 +436,7 @@ class WebAgentV3:
             self._hw.vision_color, mask, bbox, (pixel_x, pixel_y)
         )
         annotated_jpeg = self._encode_image_bytes(annotated)
+        del annotated, mask
 
         image_blocks = [
             {"type": "image", "data": annotated_jpeg, "mime_type": "image/jpeg"},
@@ -752,6 +780,10 @@ class WebAgentV3:
                             self.provider.encode_text(block["text"])
                         )
                 self.provider.append_images(messages, encoded_parts)
+                pending_image_blocks.clear()
+
+            # Prune old image messages to bound memory
+            self._prune_image_messages(messages)
 
             # Post-movement capture
             if movement_executed:

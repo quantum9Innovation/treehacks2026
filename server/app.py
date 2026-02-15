@@ -1,6 +1,8 @@
 """FastAPI application for robot arm web control."""
 
 import logging
+import signal
+import sys
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -10,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings
 from .events import EventBus
 from .hardware import HardwareManager
-from .routers.webcam import start_webcam, stop_webcam
 
 logger = logging.getLogger("server")
 
@@ -21,7 +22,7 @@ async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
     bus = EventBus()
     hw = HardwareManager(
-        arm_port=settings.arm_port,
+        arm_devices=settings.arm_devices,
         sam2_model=settings.sam2_model,
         sam2_device=settings.sam2_device,
         calibration_path=settings.calibration_path,
@@ -36,19 +37,17 @@ async def lifespan(app: FastAPI):
     await hw.start()
     logger.info("Hardware initialized")
 
-    start_webcam(
-        device=settings.webcam_device,
-        width=settings.webcam_width,
-        height=settings.webcam_height,
-        fps=settings.webcam_fps,
-        jpeg_quality=settings.webcam_jpeg_quality,
-        http_port=settings.port,
-    )
-    logger.info("Webcam stream started")
-
     yield
 
-    stop_webcam()
+    # Close WebRTC peer connections first
+    from .routers.camera import _pcs
+    for pc in list(_pcs):
+        try:
+            await pc.close()
+        except Exception:
+            pass
+    _pcs.clear()
+
     await hw.shutdown()
     logger.info("Hardware shut down")
 
@@ -80,14 +79,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .routers.calibration import router as calibration_router
     from .routers.camera import router as camera_router
     from .routers.vision import router as vision_router
-    from .routers.webcam import router as webcam_router
-
     app.include_router(arm_router)
     app.include_router(camera_router)
     app.include_router(vision_router)
     app.include_router(agent_router)
     app.include_router(calibration_router)
-    app.include_router(webcam_router)
 
     @app.get("/api/health")
     async def health():
@@ -101,7 +97,6 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="RoArm Control Server")
-    parser.add_argument("--port", type=str, help="Serial port for the arm (e.g. /dev/ttyUSB1)")
     parser.add_argument("--mock", action="store_true", help="Run with mock hardware")
     args = parser.parse_args()
 
@@ -109,9 +104,9 @@ def main():
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+    logging.getLogger("aiortc").setLevel(logging.WARNING)
+    logging.getLogger("aioice").setLevel(logging.WARNING)
     settings = Settings()
-    if args.port:
-        settings.arm_port = args.port
     if args.mock:
         settings.mock_hardware = True
     app = create_app(settings)
