@@ -19,8 +19,10 @@ SERIAL_GLOB_PATTERNS = [
 speed: float = 50
 turning: float = 10
 skip: bool = False
-repeat: bool = True
+loop: bool = True
 
+# trajectories: list[str] = sorted(glob.glob("trajectories/*.json"))
+trajectories: list[str] = ["trajectories/wave.json"]
 Pose = NewType("Pose", tuple[float, float, float, float])
 clip: Callable[[float, float, float], float] = lambda x, a, b: max(min(x, b), a)
 
@@ -120,16 +122,23 @@ def main(stdscr):
     delay: float = 0.02
 
     try:
-        if not skip:
-            stream = load("data.json")["trajectory"]
-            flag = True
-            while repeat or flag:
+        if loop:
+            while True:
+                stream = load(trajectories[0])["trajectory"]
                 for x, y, z, t in stream:
                     pose = Pose((x, y, z, t))
                     for arm in arms:
                         arm.pose_ctrl([x, y, z, t])
                     time.sleep(delay)
-                    flag = False
+
+        if not skip:
+            for trajectory in trajectories:
+                stream = load(trajectory)["trajectory"]
+                for x, y, z, t in stream:
+                    pose = Pose((x, y, z, t))
+                    for arm in arms:
+                        arm.pose_ctrl([x, y, z, t])
+                    time.sleep(delay)
 
         pose = Pose((250, 0, 250, 0))
         while True:

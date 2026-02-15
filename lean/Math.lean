@@ -2,6 +2,8 @@ import Types
 
 namespace Math
 
+def π : Float := 3.1415926536
+
 def linspace (bounds : Bounds) (n : Nat) : List Float :=
   if n == 0 then 
     [bounds.max] 
@@ -23,6 +25,9 @@ def lemniscate (a t : Float) : Point2D :=
     cost : Float := Float.cos t
     sint : Float := Float.sin t
     denom : Float := 1 + sint^2
+    
+def wave (a μ t : Float) : Point2D :=
+  {x := t, y := a * Float.sin (t * (2 * π) / μ)}
     
 def lorenz (σ ρ β: Float) (vec : Point3D) : Derivative3D :=
   {x := σ * (vec.y - vec.x), y := vec.x * (ρ - vec.z) - vec.y, z := vec.x * vec.y - β * vec.z}

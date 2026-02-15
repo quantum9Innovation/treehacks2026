@@ -5,6 +5,9 @@ import Trajectories
 
 open Lean Json System
 
+-- Directories
+def trajectoryDir := "../control/trajectories/"
+
 -- Subtypes
 def CoordinateX : Type := {x : Float // (-limit ≤ x && x ≤ limit) = true}
 def CoordinateY : Type := {y : Float // (-limit ≤ y && y ≤ limit) = true}
@@ -60,7 +63,11 @@ def createCurveTrajectory (pointSamples : List Point3D) : List Pose :=
     let angle  ← gA_safe 0.0
     return (xCoord, yCoord, zCoord, angle)
 
-def trajectory : List Pose := createCurveTrajectory Lorenz.pointSamples
+def lemniscateTrajectory : List Pose := createPlaneTrajectory Lemniscate.planeSamples xPlane
+def waveTrajectory : List Pose := createPlaneTrajectory Wave.planeSamples xPlane
+def lorenzTrajectory : List Pose := createCurveTrajectory Lorenz.pointSamples
 
 def main : IO Unit := do
-  writeTrajectory "../control/data.json" trajectory
+  writeTrajectory (trajectoryDir ++ "lemniscate.json") lemniscateTrajectory
+  writeTrajectory (trajectoryDir ++ "wave.json") waveTrajectory
+  writeTrajectory (trajectoryDir ++ "lorenz.json") lorenzTrajectory

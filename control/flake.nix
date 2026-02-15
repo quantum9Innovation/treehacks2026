@@ -48,6 +48,7 @@
           ps: [
             ps.mypy
             ps.keyboard
+            ps.websockets
             roarm_sdk
           ]
         );

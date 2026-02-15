@@ -4,7 +4,6 @@ import Utils
 open Nat
 
 -- constants
-def π : Float := 3.1415926536
 def limit : Float := 490
 def floor : Millimeters := 200
 def maxGrip : Float := 90
@@ -14,13 +13,27 @@ namespace Lemniscate
 
 def radius : Millimeters := 300
 def nSamples : Nat := 50
-def parametricBounds : Bounds := {min := 0, max := 2 * π}
+def parametricBounds : Bounds := {min := 0, max := 2 * Math.π}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def lemniscatePlane : Traceable :=
   Math.lemniscate radius
 def planeSamples : List Point2D := tSamples.map lemniscatePlane
 
 end Lemniscate
+
+-- sine wave
+namespace Wave
+
+def wavelength : Millimeters := 150
+def amplitude : Millimeters := 100
+def nSamples : Nat := 200
+def parametricBounds : Bounds := {min := -2 * wavelength, max := 2 * wavelength}
+def tSamples : List Float := Math.linspace parametricBounds nSamples
+def wavePlane : Traceable :=
+  Math.wave amplitude wavelength
+def planeSamples : List Point2D := Utils.dualize (tSamples.map wavePlane)
+
+end Wave
 
 -- lorenz attractor
 namespace Lorenz
