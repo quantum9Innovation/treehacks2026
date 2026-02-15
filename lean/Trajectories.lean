@@ -11,7 +11,7 @@ def maxGrip : Float := 90
 -- lemniscate
 namespace Lemniscate
 
-def radius : Millimeters := 350
+def radius : Millimeters := 280
 def squish : Float := 0.4
 def nSamples : Nat := 150
 def parametricBounds : Bounds := {min := 0, max := 2 * Math.π}
