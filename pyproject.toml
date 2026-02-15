@@ -47,6 +47,8 @@ format = "flat"
 [dependency-groups]
 dev = [
     "mypy>=1.0",
+    "pyright>=1.1.408",
     "pytest>=8.0",
+    "ruff>=0.15.1",
 ]
 #no-binary-package = ["pyrealsense2"]

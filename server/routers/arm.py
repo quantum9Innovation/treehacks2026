@@ -78,6 +78,14 @@ class ConnectResponse(BaseModel):
     message: str
 
 
+class ConnectAndProbeAllResponse(BaseModel):
+    status: str
+    connected: list[str]
+    probed: list[str]
+    failed: list[str]
+    message: str
+
+
 # --- Helpers ---
 
 
@@ -122,6 +130,57 @@ async def connect_arm(body: ConnectRequest, request: Request):
         raise HTTPException(500, f"Failed to connect to {body.device}: {e}")
     await bus.publish("arm.connected", {"device": body.device})
     return ConnectResponse(status="success", device=body.device, message=f"Connected to {body.device}")
+
+
+@router.post("/connect-and-probe-all", response_model=ConnectAndProbeAllResponse)
+async def connect_and_probe_all(request: Request):
+    """Connect to all available arm devices and probe ground for each one."""
+    hw, bus = _get_hw_bus(request)
+    connected: list[str] = []
+    probed: list[str] = []
+    failed: list[str] = []
+
+    for device in hw.arm_devices:
+        # Connect
+        try:
+            await hw.connect_arm(device)
+            connected.append(device)
+            await bus.publish("arm.connected", {"device": device})
+        except Exception as e:
+            logger.warning(f"Failed to connect {device}: {e}")
+            failed.append(device)
+            continue
+
+        # Probe ground
+        motion = hw.get_motion(device)
+        if motion is None:
+            failed.append(device)
+            continue
+
+        lock = hw.get_arm_lock(device)
+        try:
+            async with lock:
+                await hw.run_in_hw_thread(motion.probe_ground)
+                await hw.run_in_hw_thread(motion.home)
+                await asyncio.sleep(1)
+                x, y, z = await hw.run_in_hw_thread(motion.get_pose)
+                pose = PoseResponse(x=round(x, 1), y=round(y, 1), z=round(z, 1))
+                await bus.publish("arm.position", {"device": device, **pose.model_dump()})
+                await bus.publish("arm.ground_calibrated", {"status": True, "device": device})
+            probed.append(device)
+        except Exception as e:
+            logger.warning(f"Failed to probe ground on {device}: {e}")
+            failed.append(device)
+
+    status = "success" if not failed else ("partial" if connected else "error")
+    return ConnectAndProbeAllResponse(
+        status=status,
+        connected=connected,
+        probed=probed,
+        failed=failed,
+        message=f"Connected {len(connected)}, probed {len(probed)} arms"
+        + (f" ({len(failed)} failed)" if failed else ""),
+    )
 
 
 @router.post("/disconnect", response_model=ConnectResponse)

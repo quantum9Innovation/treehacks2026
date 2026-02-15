@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -21,9 +22,12 @@ _vision_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision"
 class FrameBundle:
     """A captured set of aligned frames."""
 
-    color_image: np.ndarray  # BGR (H, W, 3)
+    color_image: np.ndarray  # BGR (H, W, 3) — may have annotations drawn on it
+    raw_color_image: np.ndarray  # BGR (H, W, 3) — clean, no annotations
     depth_image: np.ndarray  # Colorized depth (H, W, 3)
-    depth_frame: object  # rs.depth_frame (typed as object to avoid import at module level)
+    depth_frame: (
+        object  # rs.depth_frame (typed as object to avoid import at module level)
+    )
     timestamp: float
 
 
@@ -46,7 +50,10 @@ class HardwareManager:
         google_api_key: str = "",
     ):
         self._arm_devices = arm_devices or [
-            "/dev/ARM0", "/dev/ARM1", "/dev/ARM2", "/dev/ARM3"
+            "/dev/ARM0",
+            "/dev/ARM1",
+            "/dev/ARM2",
+            "/dev/ARM3",
         ]
         self._sam2_model = sam2_model
         self._sam2_device = sam2_device
@@ -71,6 +78,9 @@ class HardwareManager:
         self._latest_frame: FrameBundle | None = None
         self._capture_task: asyncio.Task | None = None
         self._started = False
+
+        # Optional frame annotator — draws on color_image in-place before WebRTC
+        self.frame_annotator: Callable[[np.ndarray], None] | None = None
 
         # Vision frame cache (set by look, used by segment)
         self.vision_color: np.ndarray | None = None
@@ -134,6 +144,7 @@ class HardwareManager:
 
         if self._enable_sam2:
             from agent_v2.vision.sam2_backend import SAM2Backend
+
             logger.info(f"Loading SAM2 ({self._sam2_model})...")
             self.sam2 = SAM2Backend(
                 model_size=self._sam2_model, device=self._sam2_device
@@ -144,6 +155,7 @@ class HardwareManager:
         if self._enable_gemini_vision and self._google_api_key:
             from google import genai
             from agent_v3.gemini_vision import GeminiVision
+
             logger.info("Initializing Gemini ER vision...")
             vision_client = genai.Client(api_key=self._google_api_key)
             self.gemini_vision = GeminiVision(client=vision_client)
@@ -151,9 +163,7 @@ class HardwareManager:
             logger.info("Gemini Vision disabled")
 
         logger.info("Initializing coordinate transform...")
-        self.ct = CoordinateTransform(
-            calibration_path=Path(self._calibration_path)
-        )
+        self.ct = CoordinateTransform(calibration_path=Path(self._calibration_path))
         self.ct.set_intrinsics_from_camera(self.camera)
 
         logger.info("Hardware initialization complete (no arm connected yet)")
@@ -165,7 +175,12 @@ class HardwareManager:
             return None
         from pathlib import Path
         from agent_v2.calibration import calibration_path_for_device
-        return str(calibration_path_for_device(Path(self._calibration_path), self.active_arm_device))
+
+        return str(
+            calibration_path_for_device(
+                Path(self._calibration_path), self.active_arm_device
+            )
+        )
 
     def _connect_arm_sync(self, device: str):
         """Connect to an arm device (runs in thread). Does NOT disconnect other arms."""
@@ -251,11 +266,23 @@ class HardwareManager:
                 return None
 
             color_image = np.asanyarray(color_frame.get_data())
+
+            # Save clean copy before annotation for marker detection
+            raw_color = color_image.copy() if self.frame_annotator is not None else color_image
+
+            # Apply frame annotator (e.g. ArUco marker overlay) in-place
+            if self.frame_annotator is not None:
+                try:
+                    self.frame_annotator(color_image)
+                except Exception as e:
+                    logger.error(f"Frame annotator error: {e}")
+
             colorized = self.camera.colorizer.colorize(depth_frame)
             depth_image = np.asanyarray(colorized.get_data())
 
             return FrameBundle(
                 color_image=color_image,
+                raw_color_image=raw_color,
                 depth_image=depth_image,
                 depth_frame=depth_frame,
                 timestamp=time.time(),

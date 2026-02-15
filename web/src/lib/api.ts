@@ -33,6 +33,10 @@ export const armApi = {
     post<{ status: string; device: string; message: string }>('/api/arm/connect', { device }),
   disconnect: () =>
     post<{ status: string; device: string; message: string }>('/api/arm/disconnect'),
+  connectAndProbeAll: () =>
+    post<{ status: string; connected: string[]; probed: string[]; failed: string[]; message: string }>(
+      '/api/arm/connect-and-probe-all',
+    ),
   pose: () => get<{ x: number; y: number; z: number }>('/api/arm/pose'),
   move: (x: number, y: number, z: number) => post('/api/arm/move', { x, y, z }),
   home: () => post('/api/arm/home'),
@@ -89,8 +93,11 @@ export const calibrationApi = {
       current_step: number
       total_steps: number
     }>('/api/calibration/status'),
-  start: (mode = 'manual') =>
-    post<{ status: string; total_steps: number }>('/api/calibration/start', { mode }),
+  start: (mode = 'manual', marker_id?: number) =>
+    post<{ status: string; mode: string; total_steps: number }>('/api/calibration/start', {
+      mode,
+      ...(marker_id != null && { marker_id }),
+    }),
   click: (pixel_x: number, pixel_y: number) =>
     post<{ status: string; point_count?: number; rmse_mm?: number; quality?: string; points_used?: number }>(
       '/api/calibration/click',

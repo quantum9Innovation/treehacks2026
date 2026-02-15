@@ -7,6 +7,7 @@ import { PositionReadout } from '@/components/control/position-readout'
 import { StepSizeSelector } from '@/components/control/step-size-selector'
 import { ProbeGround } from '@/components/control/probe-ground'
 import { ArmSelector } from '@/components/control/arm-selector'
+import { ConnectAll } from '@/components/control/connect-all'
 import { useKeyboardControls } from '@/lib/hooks/use-keyboard-controls'
 import { useWebSocket } from '@/lib/hooks/use-websocket'
 import { useState } from 'react'
@@ -75,6 +76,7 @@ function ControlPage() {
           </CardContent>
         </Card>
 
+        <ConnectAll />
         <ProbeGround />
 
         {/* Debug info */}
