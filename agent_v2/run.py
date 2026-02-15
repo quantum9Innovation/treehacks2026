@@ -34,6 +34,12 @@ def main() -> int:
         help="SAM2 model size (default: tiny)",
     )
     parser.add_argument(
+        "--sam2-device",
+        type=str,
+        default=os.environ.get("SAM2_DEVICE", "auto"),
+        help="Torch device for SAM2 (default: auto; can also set SAM2_DEVICE env var, e.g. cuda, cuda:0, cpu)",
+    )
+    parser.add_argument(
         "--yolo-model",
         type=str,
         default="yolo11n.pt",
@@ -158,7 +164,7 @@ def main() -> int:
             from .vision.sam2_backend import SAM2Backend
             from .agent import AgentV2
 
-            sam2 = SAM2Backend(model_size=args.sam2_model)
+            sam2 = SAM2Backend(model_size=args.sam2_model, device=args.sam2_device)
             agent = AgentV2(
                 openai_api_key="unused",
                 helicone_api_key="unused",
@@ -182,7 +188,7 @@ def main() -> int:
             from .agent import AgentV2
 
             print(f"Loading SAM2 model ({args.sam2_model})...")
-            sam2 = SAM2Backend(model_size=args.sam2_model)
+            sam2 = SAM2Backend(model_size=args.sam2_model, device=args.sam2_device)
 
             agent = AgentV2(
                 openai_api_key=args.openai_api_key,
@@ -207,7 +213,7 @@ def main() -> int:
             # Even in YOLO mode, we need a SAM2 backend for the new agent
             # This is a compatibility shim — YOLO mode is deprecated
             print("Note: YOLO mode is deprecated. Starting with SAM2 instead.")
-            sam2 = SAM2Backend(model_size=args.sam2_model)
+            sam2 = SAM2Backend(model_size=args.sam2_model, device=args.sam2_device)
             agent = AgentV2(
                 openai_api_key=args.openai_api_key,
                 helicone_api_key=args.helicone_api_key,
@@ -226,7 +232,7 @@ def main() -> int:
             from .agent import AgentV2
 
             print("Loading SAM2 model (tiny) for mock mode...")
-            sam2 = SAM2Backend(model_size="tiny")
+            sam2 = SAM2Backend(model_size="tiny", device=args.sam2_device)
             agent = AgentV2(
                 openai_api_key=args.openai_api_key,
                 helicone_api_key=args.helicone_api_key,

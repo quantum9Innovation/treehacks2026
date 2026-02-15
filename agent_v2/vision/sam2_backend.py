@@ -1,6 +1,7 @@
 """SAM2 (Segment Anything Model 2) backend for point-prompt segmentation."""
 
 import logging
+import os
 import time
 
 import numpy as np
@@ -16,7 +17,7 @@ class SAM2Backend:
         2. segment_point(px, py) — fast point query (~0.3s, reuses features)
     """
 
-    def __init__(self, model_size: str = "tiny"):
+    def __init__(self, model_size: str = "tiny", device: str = "auto"):
         import torch
         from sam2.sam2_image_predictor import SAM2ImagePredictor
 
@@ -30,10 +31,15 @@ class SAM2Backend:
         if model_id is None:
             raise ValueError(f"Unknown SAM2 model size: {model_size!r}. Choose from {list(model_map)}")
 
-        logger.info(f"Loading SAM2 model: {model_id} (device=cpu)")
+        resolved_device = self._resolve_device(torch, device)
+        self.device = resolved_device
+
+        logger.info(f"Loading SAM2 model: {model_id} (device={resolved_device})")
         t0 = time.time()
 
-        self.predictor = SAM2ImagePredictor.from_pretrained(model_id, device=torch.device("cpu"))
+        self.predictor = SAM2ImagePredictor.from_pretrained(
+            model_id, device=torch.device(resolved_device)
+        )
         self._torch = torch
 
         logger.info(f"SAM2 model loaded in {time.time() - t0:.1f}s")
@@ -41,6 +47,27 @@ class SAM2Backend:
 
     def name(self) -> str:
         return "sam2"
+
+    @staticmethod
+    def _resolve_device(torch, requested: str) -> str:
+        # Precedence:
+        # 1) explicit constructor arg (unless "auto")
+        # 2) env override (SAM2_DEVICE or SAM_DEVICE)
+        # 3) auto: cuda -> mps -> cpu
+        req = (requested or "auto").strip()
+        if req.lower() != "auto":
+            return req
+
+        env_dev = (os.environ.get("SAM2_DEVICE") or os.environ.get("SAM_DEVICE") or "").strip()
+        if env_dev:
+            return env_dev
+
+        if getattr(torch, "cuda", None) is not None and torch.cuda.is_available():
+            return "cuda"
+        if getattr(torch, "backends", None) is not None and getattr(torch.backends, "mps", None) is not None:
+            if torch.backends.mps.is_available():
+                return "mps"
+        return "cpu"
 
     def set_image(self, color_bgr: np.ndarray) -> float:
         """Encode an image for subsequent point queries.

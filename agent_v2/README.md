@@ -82,15 +82,16 @@ Once running, the REPL supports:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--vision {yolo,mock}` | `yolo` | Vision backend |
+| `--vision {sam2,yolo,mock}` | `sam2` | Vision backend |
+| `--sam2-model` | `tiny` | SAM2 model size |
+| `--sam2-device` | `auto` | Torch device for SAM2 (auto prefers `cuda`, then `mps`, then `cpu`; can also set `SAM2_DEVICE`) |
 | `--yolo-model` | `yolo11n.pt` | YOLO model file (auto-downloads) |
 | `--calibration` | `agent_v2/calibration_data.json` | Path to calibration file |
 | `--calibrate` | — | Run calibration and exit |
-| `--model` | `gpt-4.1-mini` | OpenAI model ID |
+| `--touch-debug` | — | Click-to-move debug mode (no LLM required) |
+| `--model` | `gpt-5.2` | OpenAI model ID |
 | `--reasoning-effort` | `low` | Thinking effort (low/medium/high) |
 | `--port` | auto-detect | Serial port for robot arm |
-| `--z-offset` | `300` | Z offset for inverted mounting (mm) |
-| `--no-invert-z` | — | Disable Z-axis inversion |
 | `--auto-confirm` | — | Skip user confirmation (dangerous!) |
 | `--debug` | — | Enable debug logging |
 
