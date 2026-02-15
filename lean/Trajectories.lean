@@ -27,7 +27,7 @@ namespace Wave
 
 def wavelength : Millimeters := 150
 def amplitude : Millimeters := 100
-def nSamples : Nat := 200
+def nSamples : Nat := 100
 def parametricBounds : Bounds := {min := -1 * wavelength, max := 1 * wavelength}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def wavePlane : Traceable2D :=
