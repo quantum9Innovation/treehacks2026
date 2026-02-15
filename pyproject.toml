@@ -12,7 +12,7 @@ dependencies = [
     "openai>=2.21.0",
     "opencv-python>=4.13.0.92",
     "pillow>=12.1.1",
-    "pyrealsense2>=2.56.5.9235",
+    #"pyrealsense2>=2.56.5.9235",
     "python-dotenv>=1.2.1",
     "roarm-sdk>=0.1.0",
     "sam2>=1.0",
@@ -39,3 +39,4 @@ dev-dependencies = [
     "mypy>=1.0",
     "pytest>=8.0",
 ]
+#no-binary-package = ["pyrealsense2"]
