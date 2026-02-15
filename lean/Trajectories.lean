@@ -13,8 +13,8 @@ namespace Lemniscate
 
 def radius : Millimeters := 500
 def squish : Float := 0.4
-def nSamples : Nat := 100
-def parametricBounds : Bounds := {min := 0, max := 4 * Math.π}
+def nSamples : Nat := 200
+def parametricBounds : Bounds := {min := 0, max := 2 * Math.π}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def lemniscatePlane : Traceable2D :=
   Math.lemniscate radius squish
