@@ -5,18 +5,19 @@ open Nat
 
 -- constants
 def limit : Float := 490
-def floor : Millimeters := 100
+def floor : Millimeters := 75
 def maxGrip : Float := 90
 
 -- lemniscate
 namespace Lemniscate
 
-def radius : Millimeters := 450
+def radius : Millimeters := 500
+def squish : Float := 0.4
 def nSamples : Nat := 100
 def parametricBounds : Bounds := {min := 0, max := 4 * Math.π}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def lemniscatePlane : Traceable2D :=
-  Math.lemniscate radius
+  Math.lemniscate radius squish
 def planeSamples : List Point2D := Utils.dualize <| tSamples.map lemniscatePlane
 
 end Lemniscate

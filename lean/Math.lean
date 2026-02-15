@@ -19,8 +19,8 @@ def rk4 [VectorLike Float β] (h : Float) (y' : β → β) (y : β) : β :=
   let k4 := y' (y + h * k3)
   y + h / 6 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
-def lemniscate (a t : Float) : Point2D :=
-  {x := a * cost / denom, y := a * sint * cost / denom}
+def lemniscate (a h t : Float) : Point2D :=
+  {x := a * cost / denom, y := h * a * sint * cost / denom}
   where
     cost : Float := Float.cos t
     sint : Float := Float.sin t
