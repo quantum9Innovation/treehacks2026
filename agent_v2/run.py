@@ -56,7 +56,18 @@ def main() -> int:
     parser.add_argument(
         "--calibrate",
         action="store_true",
-        help="Run interactive calibration procedure and exit",
+        help="Run automatic ArUco marker calibration and exit",
+    )
+    parser.add_argument(
+        "--calibrate-manual",
+        action="store_true",
+        help="Run manual click-based calibration and exit (legacy)",
+    )
+    parser.add_argument(
+        "--aruco-marker-id",
+        type=int,
+        default=None,
+        help="Specific ArUco marker ID to detect (default: any marker)",
     )
     parser.add_argument(
         "--touch-debug",
@@ -116,7 +127,7 @@ def main() -> int:
     args = parser.parse_args()
 
     # Validate API keys (not needed for hardware-only modes)
-    if not args.calibrate and not args.touch_debug:
+    if not args.calibrate and not args.calibrate_manual and not args.touch_debug:
         if not args.openai_api_key:
             print("Error: OpenAI API key required.")
             print("Set OPENAI_API_KEY environment variable or use --openai-api-key")
@@ -132,12 +143,11 @@ def main() -> int:
     )
 
     try:
-        if args.calibrate:
+        if args.calibrate or args.calibrate_manual:
             # Calibration-only mode
             import time
             from agent.camera import RealSenseCamera
             from motion_controller.motion import Motion
-            from .calibration import CalibrationProcedure
             from .coordinate_transform import CoordinateTransform
 
             camera = RealSenseCamera()
@@ -150,7 +160,15 @@ def main() -> int:
             motion.probe_ground()
 
             try:
-                proc = CalibrationProcedure(camera, motion, ct)
+                if args.calibrate_manual:
+                    from .calibration import CalibrationProcedure
+                    proc = CalibrationProcedure(camera, motion, ct)
+                else:
+                    from .calibration import ArucoCalibrationProcedure
+                    proc = ArucoCalibrationProcedure(
+                        camera, motion, ct,
+                        marker_id=args.aruco_marker_id,
+                    )
                 proc.run(save_path=calibration_path)
             finally:
                 motion.home()
