@@ -2,7 +2,6 @@
 
 import logging
 import signal
-import sys
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -110,4 +109,34 @@ def main():
     if args.mock:
         settings.mock_hardware = True
     app = create_app(settings)
+
+    # Force exit if graceful shutdown hangs (e.g. blocked hardware threads)
+    import os
+    import threading
+
+    _original_sigint = signal.getsignal(signal.SIGINT)
+    _shutting_down = False
+
+    def _force_exit(signum, frame):
+        nonlocal _shutting_down
+        if _shutting_down:
+            logger.warning("Second Ctrl-C, forcing exit")
+            os._exit(1)
+        _shutting_down = True
+
+        # Watchdog: force-kill after 5s if graceful shutdown hangs
+        def _watchdog():
+            import time
+            time.sleep(5)
+            logger.warning("Shutdown timed out after 5s, forcing exit")
+            os._exit(1)
+
+        threading.Thread(target=_watchdog, daemon=True).start()
+
+        # Forward first SIGINT to uvicorn for graceful shutdown
+        if callable(_original_sigint):
+            _original_sigint(signum, frame)
+
+    signal.signal(signal.SIGINT, _force_exit)
+
     uvicorn.run(app, host=settings.host, port=settings.port)

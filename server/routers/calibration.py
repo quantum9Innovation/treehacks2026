@@ -124,13 +124,18 @@ class WebCalibrationSession:
         return {"status": "skipped", "point_count": len(self.cam_points)}
 
     async def _solve(self) -> dict:
-        from agent_v2.calibration import save_calibration, solve_affine_transform
+        from agent_v2.calibration import calibration_path_for_device, save_calibration, solve_affine_transform
 
         cam_arr = np.array(self.cam_points)
         arm_arr = np.array(self.arm_points)
         M, rmse = solve_affine_transform(cam_arr, arm_arr)
 
-        save_path = Path(self.hw._calibration_path)
+        # Save to per-arm calibration file
+        base_path = Path(self.hw._calibration_path)
+        if self.hw.active_arm_device:
+            save_path = calibration_path_for_device(base_path, self.hw.active_arm_device)
+        else:
+            save_path = base_path
         save_calibration(M, rmse, save_path)
 
         # Reload into coordinate transform
@@ -156,13 +161,15 @@ async def calibration_status(request: Request):
 
     rmse = None
     if hw.ct is not None and hw.ct._M is not None:
-        # Try to read RMSE from calibration file
+        # Try to read RMSE from per-arm calibration file
         try:
             import json
-            cal_path = Path(hw._calibration_path)
-            if cal_path.exists():
-                data = json.loads(cal_path.read_text())
-                rmse = data.get("rmse_mm")
+            cal_path_str = hw.active_calibration_path
+            if cal_path_str:
+                cal_path = Path(cal_path_str)
+                if cal_path.exists():
+                    data = json.loads(cal_path.read_text())
+                    rmse = data.get("rmse_mm")
         except Exception:
             pass
 

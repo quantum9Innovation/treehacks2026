@@ -558,11 +558,12 @@ class Motion:
         }
 
     def get_pose(self):
-        """Get current ground-relative XYZ (using our FK)."""
-        self._require_calibrated()
+        """Get current XYZ (using our FK). Ground-relative if calibrated, native otherwise."""
         fb = self._feedback()
         x, y, z = fk(fb[3], fb[4], fb[5])
-        return x, y, self._from_native_z(z)
+        if self.ground_z is not None:
+            return x, y, self._from_native_z(z)
+        return x, y, z
 
     def home(self):
         self.arm.joints_radian_ctrl(radians=[0, 0, math.pi / 2, 0], speed=2000, acc=200)

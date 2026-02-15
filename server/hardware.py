@@ -10,8 +10,10 @@ import numpy as np
 
 logger = logging.getLogger("server.hardware")
 
-# Single-thread executor for serializing hardware access
+# Single-thread executor for serializing arm/hardware access
 _hw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hw")
+# Separate executor for camera capture so arm movements don't block the video stream
+_camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera")
 _vision_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision")
 
 
@@ -26,7 +28,11 @@ class FrameBundle:
 
 
 class HardwareManager:
-    """Owns all physical hardware as singletons with thread-safe access."""
+    """Owns all physical hardware as singletons with thread-safe access.
+
+    Supports multiple simultaneously connected arms, each with independent
+    Motion instances and locks.
+    """
 
     def __init__(
         self,
@@ -51,18 +57,20 @@ class HardwareManager:
         self._google_api_key = google_api_key
 
         self.camera = None
-        self.motion = None
         self.sam2 = None
         self.ct = None
         self.gemini_vision = None
+
+        # Per-arm state: device path -> Motion instance
+        self._motions: dict[str, object] = {}
+        # Per-arm locks: device path -> asyncio.Lock
+        self._arm_locks: dict[str, asyncio.Lock] = {}
+        # Convenience: most recently connected/selected device
         self.active_arm_device: str | None = None
 
         self._latest_frame: FrameBundle | None = None
         self._capture_task: asyncio.Task | None = None
         self._started = False
-
-        # Lock for arm commands (serialize movements)
-        self.arm_lock = asyncio.Lock()
 
         # Vision frame cache (set by look, used by segment)
         self.vision_color: np.ndarray | None = None
@@ -71,6 +79,29 @@ class HardwareManager:
     @property
     def arm_devices(self) -> list[str]:
         return list(self._arm_devices)
+
+    @property
+    def connected_devices(self) -> list[str]:
+        """List of currently connected arm device paths."""
+        return list(self._motions.keys())
+
+    @property
+    def motion(self):
+        """Active arm's Motion instance (backwards compat)."""
+        return self.get_motion()
+
+    def get_motion(self, device: str | None = None):
+        """Get Motion instance for a device. Falls back to active_arm_device."""
+        dev = device or self.active_arm_device
+        if dev is None:
+            return None
+        return self._motions.get(dev)
+
+    def get_arm_lock(self, device: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for the given device."""
+        if device not in self._arm_locks:
+            self._arm_locks[device] = asyncio.Lock()
+        return self._arm_locks[device]
 
     def clear_vision_cache(self):
         """Release cached vision frames to free memory."""
@@ -127,51 +158,67 @@ class HardwareManager:
 
         logger.info("Hardware initialization complete (no arm connected yet)")
 
+    @property
+    def active_calibration_path(self) -> str | None:
+        """Return the calibration file path for the currently connected arm."""
+        if self.active_arm_device is None:
+            return None
+        from pathlib import Path
+        from agent_v2.calibration import calibration_path_for_device
+        return str(calibration_path_for_device(Path(self._calibration_path), self.active_arm_device))
+
     def _connect_arm_sync(self, device: str):
-        """Connect to an arm device (runs in thread)."""
+        """Connect to an arm device (runs in thread). Does NOT disconnect other arms."""
         from motion_controller.motion import Motion
 
-        # Disconnect existing arm if any
-        if self.motion is not None:
-            try:
-                self.motion.home()
-                time.sleep(1)
-            except Exception as e:
-                logger.error(f"Error homing previous arm: {e}")
-            self.motion = None
-            self.active_arm_device = None
+        if device in self._motions:
+            logger.info(f"Already connected to {device}, skipping")
+            self.active_arm_device = device
+            return
 
         logger.info(f"Connecting to arm on {device}...")
-        self.motion = Motion(port=device, inverted=True)
+        motion = Motion(port=device, inverted=True)
+        self._motions[device] = motion
         self.active_arm_device = device
 
+        # Load per-arm calibration data
+        if self.ct is not None:
+            self.ct.load_calibration_for_device(device)
+
         logger.info("Moving to home (skipping ground probe — use control panel)...")
-        self.motion.arm.move_init()
+        motion.arm.joints_radian_ctrl(radians=[0, 0, 1.5708, 0], speed=4000, acc=200)
         time.sleep(1)
 
         logger.info(f"Arm connected on {device}")
 
     async def connect_arm(self, device: str):
-        """Connect to a specific arm device."""
-        async with self.arm_lock:
+        """Connect to a specific arm device (keeps other arms connected)."""
+        lock = self.get_arm_lock(device)
+        async with lock:
             await self.run_in_hw_thread(self._connect_arm_sync, device)
 
-    def _disconnect_arm_sync(self):
-        """Disconnect the current arm (runs in thread)."""
-        if self.motion is not None:
+    def _disconnect_arm_sync(self, device: str):
+        """Disconnect a specific arm (runs in thread)."""
+        motion = self._motions.pop(device, None)
+        if motion is not None:
             try:
-                self.motion.home()
+                motion.home()
                 time.sleep(1)
             except Exception as e:
-                logger.error(f"Error homing arm: {e}")
-            self.motion = None
-            self.active_arm_device = None
-            logger.info("Arm disconnected")
+                logger.error(f"Error homing arm on {device}: {e}")
+            # If this was the active device, switch to another connected arm (or None)
+            if self.active_arm_device == device:
+                self.active_arm_device = next(iter(self._motions), None)
+            logger.info(f"Arm {device} disconnected")
 
-    async def disconnect_arm(self):
-        """Disconnect the current arm."""
-        async with self.arm_lock:
-            await self.run_in_hw_thread(self._disconnect_arm_sync)
+    async def disconnect_arm(self, device: str | None = None):
+        """Disconnect a specific arm (or the active arm if not specified)."""
+        dev = device or self.active_arm_device
+        if dev is None:
+            return
+        lock = self.get_arm_lock(dev)
+        async with lock:
+            await self.run_in_hw_thread(self._disconnect_arm_sync, dev)
 
     async def _capture_loop(self):
         """Continuously capture frames at ~30fps."""
@@ -179,7 +226,7 @@ class HardwareManager:
         while True:
             try:
                 bundle = await loop.run_in_executor(
-                    _hw_executor, self._capture_once
+                    _camera_executor, self._capture_once
                 )
                 if bundle is not None:
                     self._latest_frame = bundle
@@ -258,15 +305,17 @@ class HardwareManager:
 
         # Shut down thread pools so their non-daemon threads don't block exit
         _hw_executor.shutdown(wait=False)
+        _camera_executor.shutdown(wait=False)
         _vision_executor.shutdown(wait=False)
 
     def _shutdown_sync(self):
-        if self.motion:
+        for device, motion in list(self._motions.items()):
             try:
-                self.motion.home()
+                motion.home()
                 time.sleep(1)
             except Exception as e:
-                logger.error(f"Error homing arm: {e}")
+                logger.error(f"Error homing arm {device}: {e}")
+        self._motions.clear()
         if self.camera:
             try:
                 self.camera.stop()

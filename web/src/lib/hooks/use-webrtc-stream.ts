@@ -81,5 +81,5 @@ export function useWebRTCStream() {
     }
   }, [connect])
 
-  return { videoRef, connected, activeTrackIndex, switchTrack }
+  return { videoRef, connected, activeTrackIndex, switchTrack, tracks }
 }

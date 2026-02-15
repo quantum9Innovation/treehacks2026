@@ -5,7 +5,6 @@ import { MovementGrid } from '@/components/control/movement-grid'
 import { GripperControl } from '@/components/control/gripper-control'
 import { PositionReadout } from '@/components/control/position-readout'
 import { StepSizeSelector } from '@/components/control/step-size-selector'
-import { EmergencyStop } from '@/components/control/emergency-stop'
 import { ProbeGround } from '@/components/control/probe-ground'
 import { ArmSelector } from '@/components/control/arm-selector'
 import { useKeyboardControls } from '@/lib/hooks/use-keyboard-controls'
@@ -77,7 +76,6 @@ function ControlPage() {
         </Card>
 
         <ProbeGround />
-        <EmergencyStop />
 
         {/* Debug info */}
         {(clickInfo || segResult) && (

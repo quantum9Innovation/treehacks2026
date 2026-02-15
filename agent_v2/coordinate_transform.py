@@ -6,7 +6,12 @@ from pathlib import Path
 import numpy as np
 import pyrealsense2 as rs
 
-from .calibration import DEFAULT_CALIBRATION_PATH, apply_affine, load_calibration
+from .calibration import (
+    DEFAULT_CALIBRATION_PATH,
+    apply_affine,
+    calibration_path_for_device,
+    load_calibration,
+)
 from .models import DetectedObject, Point3D, SceneState
 
 logger = logging.getLogger("agent_v2.coordinate_transform")
@@ -19,8 +24,10 @@ class CoordinateTransform:
         self._intrinsics: rs.intrinsics | None = None
         self._depth_scale: float = 0.001  # default, updated from device
         self._align: rs.align = rs.align(rs.stream.color)
+        self._calibration_path = calibration_path
 
         # Load calibration if available (3x4 affine matrix)
+        # Note: when used via the server, per-arm calibration is loaded on connect.
         self._M: np.ndarray | None = None
         if calibration_path.exists():
             try:
@@ -48,6 +55,24 @@ class CoordinateTransform:
                 "\n"
                 "  Or type 'calibrate' in the interactive REPL.\n"
             )
+
+    def load_calibration_for_device(self, device: str) -> None:
+        """Load calibration data for a specific arm device.
+
+        Args:
+            device: Device path (e.g., "/dev/ARM0")
+        """
+        cal_path = calibration_path_for_device(self._calibration_path, device)
+        if cal_path.exists():
+            try:
+                logger.info(f"Loading calibration for {device} from: {cal_path}")
+                self._M = load_calibration(cal_path)
+            except Exception as e:
+                logger.warning(f"Failed to load calibration for {device}: {e}")
+                self._M = None
+        else:
+            logger.warning(f"No calibration file for {device} at {cal_path}")
+            self._M = None
 
     def set_intrinsics_from_profile(self, profile: rs.pipeline_profile) -> None:
         """Extract and store camera intrinsics from a running pipeline profile.

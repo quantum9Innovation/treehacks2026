@@ -13,6 +13,17 @@ logger = logging.getLogger("agent_v2.calibration")
 
 DEFAULT_CALIBRATION_PATH = Path(__file__).parent / "calibration_data.json"
 
+
+def calibration_path_for_device(base_path: Path, device: str) -> Path:
+    """Derive a per-arm calibration path from the base path and device name.
+
+    E.g. base="agent_v2/calibration_data.json", device="/dev/ARM0"
+      → "agent_v2/calibration_data_ARM0.json"
+    """
+    # Extract arm name from device path (e.g., "/dev/ARM0" → "ARM0")
+    arm_name = Path(device).name
+    return base_path.with_stem(f"{base_path.stem}_{arm_name}")
+
 # Predefined arm positions spanning the workspace (x, y, z) in mm.
 # Z is ground-relative (0 = ground, positive = up).
 # Wide spread across all three axes is critical for the solver.

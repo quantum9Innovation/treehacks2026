@@ -9,10 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as DisplayRouteImport } from './routes/display'
 import { Route as CalibrationRouteImport } from './routes/calibration'
 import { Route as AgentRouteImport } from './routes/agent'
 import { Route as IndexRouteImport } from './routes/index'
 
+const DisplayRoute = DisplayRouteImport.update({
+  id: '/display',
+  path: '/display',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CalibrationRoute = CalibrationRouteImport.update({
   id: '/calibration',
   path: '/calibration',
@@ -33,34 +39,45 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agent': typeof AgentRoute
   '/calibration': typeof CalibrationRoute
+  '/display': typeof DisplayRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agent': typeof AgentRoute
   '/calibration': typeof CalibrationRoute
+  '/display': typeof DisplayRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/agent': typeof AgentRoute
   '/calibration': typeof CalibrationRoute
+  '/display': typeof DisplayRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/agent' | '/calibration'
+  fullPaths: '/' | '/agent' | '/calibration' | '/display'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/agent' | '/calibration'
-  id: '__root__' | '/' | '/agent' | '/calibration'
+  to: '/' | '/agent' | '/calibration' | '/display'
+  id: '__root__' | '/' | '/agent' | '/calibration' | '/display'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentRoute: typeof AgentRoute
   CalibrationRoute: typeof CalibrationRoute
+  DisplayRoute: typeof DisplayRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/display': {
+      id: '/display'
+      path: '/display'
+      fullPath: '/display'
+      preLoaderRoute: typeof DisplayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/calibration': {
       id: '/calibration'
       path: '/calibration'
@@ -89,6 +106,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentRoute: AgentRoute,
   CalibrationRoute: CalibrationRoute,
+  DisplayRoute: DisplayRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

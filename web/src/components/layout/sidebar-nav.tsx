@@ -1,11 +1,12 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Gamepad2, MessageSquare, Crosshair } from 'lucide-react'
+import { Gamepad2, MessageSquare, Crosshair, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
   { to: '/', label: 'Control', icon: Gamepad2 },
   { to: '/agent', label: 'Agent', icon: MessageSquare },
   { to: '/calibration', label: 'Calibrate', icon: Crosshair },
+  { to: '/display', label: 'Display', icon: Monitor },
 ] as const
 
 export function SidebarNav() {
