@@ -189,6 +189,11 @@ def main():
 
     try:
         while True:
+            double_lemniscate(monitor_arm, right_arm, back_arm, left_arm)
+            quad_spring(monitor_arm, right_arm, back_arm, left_arm)
+            six_seven(monitor_arm, right_arm, back_arm, left_arm)
+            helix(monitor_arm, right_arm, back_arm, left_arm)
+            lorenz(monitor_arm, right_arm, back_arm, left_arm)
             rossler(monitor_arm, right_arm, back_arm, left_arm)
 
     except KeyboardInterrupt:
