@@ -39,7 +39,7 @@ def gA_safe (f : Float) : Option GripAngle :=
   if h : (0.0 ≤ f && f ≤ maxGrip) then some ⟨f, h⟩ else none
 
 -- Allowable pose coordinates
-def xPlane : CoordinateX := cX 250
+def xPlane : CoordinateX := cX 230
 def Pose := CoordinateX × CoordinateY × CoordinateZ × GripAngle
 
 def writeTrajectory (path : FilePath) (trajectory : List Pose) (delay : Seconds) : IO Unit := do
