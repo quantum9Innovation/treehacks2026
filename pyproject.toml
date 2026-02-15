@@ -40,6 +40,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src", "agent", "agent_v2", "agent_v3", "motion_controller", "server"]
 
+[[tool.uv.index]]
+name = "local-wheels"
+url = "./wheels"
+format = "flat"
+
 [tool.uv]
 dev-dependencies = [
     "mypy>=1.0",
