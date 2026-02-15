@@ -42,16 +42,24 @@ namespace Spring
 def tilt : Millimeters := 20
 def amplitude : Millimeters := 130
 def frequency : Hertz := 1.5
-def phaseShift : Float := Math.π / 2
+def shift1 : Float := Math.π / 4
+def shift2 : Float := Math.π / 2
+def shift3 : Float := 3 * Math.π / 4
 def nSamples : Nat := 400
 def parametricBounds : Bounds := {min := 0, max := 9 / frequency}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def springPlane : Traceable2D :=
   Math.spring tilt amplitude frequency 0
-def springPlaneShift : Traceable2D :=
-  Math.spring tilt amplitude frequency phaseShift
+def springPlaneShift1 : Traceable2D :=
+  Math.spring tilt amplitude frequency shift1
+def springPlaneShift2 : Traceable2D :=
+  Math.spring tilt amplitude frequency shift2
+def springPlaneShift3 : Traceable2D :=
+  Math.spring tilt amplitude frequency shift3
 def planeSamples : List Point2D := Utils.dualize <| tSamples.map springPlane
-def planeSamplesShift : List Point2D := Utils.dualize <| tSamples.map springPlaneShift
+def planeSamplesShift1 : List Point2D := Utils.dualize <| tSamples.map springPlaneShift1
+def planeSamplesShift2 : List Point2D := Utils.dualize <| tSamples.map springPlaneShift2
+def planeSamplesShift3 : List Point2D := Utils.dualize <| tSamples.map springPlaneShift3
 
 end Spring
 
