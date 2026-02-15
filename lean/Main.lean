@@ -6,7 +6,7 @@ import Trajectories
 open Lean Json System
 
 -- Directories
-def trajectoryDir := "../control/trajectories/"
+def trajectoryDir : String := "../control/trajectories/"
 
 -- Subtypes
 def CoordinateX : Type := {x : Float // (-limit ≤ x && x ≤ limit) = true}
@@ -43,20 +43,20 @@ def xPlane : CoordinateX := cX 300
 def Pose := CoordinateX × CoordinateY × CoordinateZ × GripAngle
 
 def writeTrajectory (path : FilePath) (trajectory : List Pose) : IO Unit := do
-  let trajectoryJson : List Json := trajectory.map fun (x, y, z, t) =>
+  let trajectoryJson : List Json := trajectory.map λ (x, y, z, t) =>
     Json.arr #[Json.str (toString x), Json.str (toString y), Json.str (toString z), Json.str (toString t)]
   let jsonObj := Json.mkObj [("trajectory", Json.arr (trajectoryJson.toArray))]
   IO.FS.writeFile path (jsonObj.pretty 4)
 
 def createPlaneTrajectory (planeFigure : List Point2D) (slice : CoordinateX) : List Pose :=
-  planeFigure.filterMap fun p => do
+  planeFigure.filterMap λ p => do
     let yCoord ← cY_safe p.x
     let zCoord ← cZ_safe (p.y + floor)
     let angle  ← gA_safe 0.0
     return (slice, yCoord, zCoord, angle)
     
 def createCurveTrajectory (pointSamples : List Point3D) : List Pose :=
-  pointSamples.filterMap fun p => do
+  pointSamples.filterMap λ p => do
     let xCoord ← cX_safe p.x
     let yCoord ← cY_safe p.y
     let zCoord ← cZ_safe (p.z + floor)
@@ -66,8 +66,10 @@ def createCurveTrajectory (pointSamples : List Point3D) : List Pose :=
 def lemniscateTrajectory : List Pose := createPlaneTrajectory Lemniscate.planeSamples xPlane
 def waveTrajectory : List Pose := createPlaneTrajectory Wave.planeSamples xPlane
 def lorenzTrajectory : List Pose := createCurveTrajectory Lorenz.pointSamples
+def helixTrajectory : List Pose := createCurveTrajectory Helix.pointSamples
 
 def main : IO Unit := do
   writeTrajectory (trajectoryDir ++ "lemniscate.json") lemniscateTrajectory
   writeTrajectory (trajectoryDir ++ "wave.json") waveTrajectory
   writeTrajectory (trajectoryDir ++ "lorenz.json") lorenzTrajectory
+  writeTrajectory (trajectoryDir ++ "helix.json") helixTrajectory

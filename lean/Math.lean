@@ -9,7 +9,7 @@ def linspace (bounds : Bounds) (n : Nat) : List Float :=
     [bounds.max] 
   else
     let step := (bounds.max - bounds.min) / n.toFloat
-    List.range (n + 1) |>.map (fun i => bounds.min + i.toFloat * step)
+    List.range (n + 1) |>.map (λ i => bounds.min + i.toFloat * step)
     
 def rk4 [VectorLike Float β] (h : Float) (y' : β → β) (y : β) : β :=
   let dy := y' y
@@ -31,5 +31,9 @@ def wave (a μ t : Float) : Point2D :=
     
 def lorenz (σ ρ β: Float) (vec : Point3D) : Derivative3D :=
   {x := σ * (vec.y - vec.x), y := vec.x * (ρ - vec.z) - vec.y, z := vec.x * vec.y - β * vec.z}
+  
+def helix (radius height : Float) (turns : Nat) (t : Float) : Point3D :=
+  let overTurns := 1 / (Float.ofNat turns)
+  {x := radius * Float.cos (t * (2 * π) * overTurns), y := radius * Float.sin (t * (2 * π) * overTurns), z := height * t * overTurns}
 
 end Math

@@ -47,7 +47,8 @@ class VectorLike (α : Type) (β : Type) extends HMul α β β, Add β
 instance [HMul α β β] [Add β] : VectorLike α β := {}
 
 abbrev Derivative3D : Type := Point3D
-def Traceable : Type := Float → Point2D
+def Traceable2D : Type := Float → Point2D
+def Traceable3D : Type := Float → Point3D
 
 structure Bounds where
   min : Float
