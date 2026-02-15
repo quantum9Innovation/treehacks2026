@@ -43,7 +43,7 @@ def tilt : Millimeters := 20
 def amplitude : Millimeters := 120
 def frequency : Hertz := 1.5
 def phaseShift : Float := 0
-def nSamples : Nat := 200
+def nSamples : Nat := 400
 def parametricBounds : Bounds := {min := 0, max := 9 / frequency}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def springPlane : Traceable2D :=
