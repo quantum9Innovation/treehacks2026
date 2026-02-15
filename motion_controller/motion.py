@@ -351,6 +351,212 @@ class Motion:
 
         return contact_z
 
+    def move_relative(self, dx, dy, dz, speed=2000, acc=200):
+        """Move by a relative offset from the current position.
+
+        Args:
+            dx, dy, dz: Offset in mm (ground-relative, dz>0 = up).
+            speed, acc: Joint speed and acceleration.
+
+        Returns:
+            True if the target was reached within tolerance.
+        """
+        x, y, z = self.get_pose()
+        return self.move_to(x + dx, y + dy, z + dz, speed=speed, acc=acc)
+
+    def force_move(self, direction, max_force=CONTACT_THRESHOLD,
+                   max_distance_mm=100.0, speed=PROBE_SPEED, acc=100):
+        """Move along a direction with torque monitoring.
+
+        Generalization of probe_height_at to arbitrary directions.
+        Stops when any joint torque delta exceeds max_force or the
+        maximum distance is exhausted.
+
+        Args:
+            direction: (dx, dy, dz) direction vector (normalized internally).
+            max_force: Torque delta threshold to stop (default: CONTACT_THRESHOLD).
+            max_distance_mm: Maximum travel distance in mm.
+            speed: Joint speed (default: PROBE_SPEED = 300).
+            acc: Acceleration (default: 100).
+
+        Returns:
+            dict with keys: contact (bool), distance_mm (float),
+            final_position (tuple), max_torque_delta (int).
+        """
+        self._require_calibrated()
+
+        # Current position (ground-relative)
+        x0, y0, z0 = self.get_pose()
+
+        # Normalize direction
+        dx, dy, dz = direction
+        mag = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if mag < 1e-6:
+            return {
+                "contact": False, "distance_mm": 0.0,
+                "final_position": (x0, y0, z0), "max_torque_delta": 0,
+            }
+        dx, dy, dz = dx / mag, dy / mag, dz / mag
+
+        # Find a reachable target, shrinking distance if needed
+        dist = max_distance_mm
+        while dist > 5.0:
+            tx = x0 + dx * dist
+            ty = y0 + dy * dist
+            tz = max(0.0, z0 + dz * dist)
+            native_tz = self._to_native_z(tz)
+            if reachable(tx, ty, native_tz):
+                break
+            dist -= 10.0
+        else:
+            return {
+                "contact": False, "distance_mm": 0.0,
+                "final_position": (x0, y0, z0), "max_torque_delta": 0,
+                "error": "No reachable target along direction",
+            }
+
+        # Compute target joints
+        target_joints = ik(tx, ty, native_tz)
+        target_joints[1] = max(-math.pi / 2, min(math.pi / 2, target_joints[1]))
+        target_joints[2] = max(-0.873, min(math.pi, target_joints[2]))
+
+        # Start slow motion toward target
+        self.arm.joints_radian_ctrl(radians=target_joints, speed=speed, acc=acc)
+
+        # Torque baselining (same pattern as probe_height_at)
+        time.sleep(0.5)
+        for _ in range(3):
+            self._get_torques()
+            time.sleep(POLL_INTERVAL)
+        baseline = list(self._get_torques())
+
+        # Native coords of start position for distance tracking
+        native_z0 = self._to_native_z(z0)
+
+        # Poll loop
+        max_delta = 0
+        contact = False
+        timeout = (max_distance_mm / 5.0) + 5.0
+        start = time.time()
+
+        while time.time() - start < timeout:
+            time.sleep(POLL_INTERVAL)
+            torques = self._get_torques()
+            deltas = [abs(torques[i] - baseline[i]) for i in range(4)]
+            current_max = max(deltas)
+            max_delta = max(max_delta, int(current_max))
+
+            if current_max > max_force:
+                # Freeze at current position
+                fb = self._feedback()
+                self.arm.joints_radian_ctrl(
+                    radians=[fb[3], fb[4], fb[5], fb[6]], speed=1000, acc=200
+                )
+                time.sleep(0.3)
+                contact = True
+                break
+
+            # Check if reached target
+            fb = self._feedback()
+            cx, cy, cz = fk(fb[3], fb[4], fb[5])
+            err = math.sqrt((tx - cx) ** 2 + (ty - cy) ** 2 + (native_tz - cz) ** 2)
+            if err < POSITION_TOLERANCE:
+                break
+
+        final = self.get_pose()
+        traveled = math.sqrt(
+            (final[0] - x0) ** 2 + (final[1] - y0) ** 2 + (final[2] - z0) ** 2
+        )
+        return {
+            "contact": contact,
+            "distance_mm": round(traveled, 1),
+            "final_position": final,
+            "max_torque_delta": max_delta,
+        }
+
+    def follow_trajectory(self, waypoints, speed=1000, acc=200,
+                          force_threshold=None):
+        """Execute a sequence of ground-relative XYZ waypoints.
+
+        Streams joint commands at ~50Hz for smooth motion.
+
+        Args:
+            waypoints: List of (x, y, z) ground-relative coordinates.
+            speed: Joint speed for each waypoint command.
+            acc: Acceleration.
+            force_threshold: If set, monitor torque and stop on contact.
+
+        Returns:
+            dict with keys: completed (bool), waypoints_executed (int),
+            contact (bool), final_position (tuple).
+        """
+        self._require_calibrated()
+
+        if not waypoints:
+            return {
+                "completed": True, "waypoints_executed": 0,
+                "contact": False, "final_position": self.get_pose(),
+            }
+
+        # Pre-validate all waypoints
+        joint_waypoints = []
+        for i, (x, y, z) in enumerate(waypoints):
+            z = max(0.0, z)
+            native_z = self._to_native_z(z)
+            if not reachable(x, y, native_z):
+                print(f"  Waypoint {i} unreachable: ({x:.0f}, {y:.0f}, {z:.0f})")
+                return {
+                    "completed": False, "waypoints_executed": 0,
+                    "contact": False, "final_position": self.get_pose(),
+                    "error": f"Waypoint {i} unreachable",
+                }
+            joints = ik(x, y, native_z)
+            joints[1] = max(-math.pi / 2, min(math.pi / 2, joints[1]))
+            joints[2] = max(-0.873, min(math.pi, joints[2]))
+            joint_waypoints.append(joints)
+
+        # Optional torque baseline (before trajectory starts, while stationary)
+        baseline = None
+        if force_threshold is not None:
+            time.sleep(0.1)
+            for _ in range(3):
+                self._get_torques()
+                time.sleep(POLL_INTERVAL)
+            baseline = list(self._get_torques())
+
+        # Stream waypoints
+        STREAM_DELAY = 0.02  # ~50Hz, proven in control/main.py
+        contact = False
+        executed = 0
+
+        for joints in joint_waypoints:
+            self.arm.joints_radian_ctrl(radians=joints, speed=speed, acc=acc)
+            time.sleep(STREAM_DELAY)
+            executed += 1
+
+            if baseline is not None:
+                torques = self._get_torques()
+                deltas = [abs(torques[i] - baseline[i]) for i in range(4)]
+                if max(deltas) > force_threshold:
+                    fb = self._feedback()
+                    self.arm.joints_radian_ctrl(
+                        radians=[fb[3], fb[4], fb[5], fb[6]], speed=1000, acc=200
+                    )
+                    time.sleep(0.3)
+                    contact = True
+                    break
+
+        # Wait for last waypoint to settle
+        if not contact:
+            time.sleep(0.5)
+
+        return {
+            "completed": executed == len(joint_waypoints) and not contact,
+            "waypoints_executed": executed,
+            "contact": contact,
+            "final_position": self.get_pose(),
+        }
+
     def get_pose(self):
         """Get current ground-relative XYZ (using our FK)."""
         self._require_calibrated()

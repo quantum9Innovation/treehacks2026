@@ -1,14 +1,13 @@
-"""Tool declarations for Gemini function calling (Agent V3)."""
-
-from google.genai import types
+"""Tool declarations for Agent V3 (provider-agnostic)."""
 
 TOOL_DECLARATIONS = [
     {
         "name": "look",
         "description": (
             "Capture a fresh camera frame. Returns the raw color image (640x480) "
-            "and a colorized depth image so you can see the scene. After calling "
-            "look(), you can call detect(query) to locate objects."
+            "with a labeled coordinate grid and a colorized depth image so you can "
+            "see the scene. After calling look(), you can call detect() or segment() "
+            "to locate objects."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
@@ -17,8 +16,8 @@ TOOL_DECLARATIONS = [
         "description": (
             "Detect and segment an object using a natural language description. "
             "Returns the object's pixel centroid, bounding box, segmentation mask "
-            "overlay, and 3D arm coordinates. Use this to precisely locate an "
-            "object before moving to it. Requires a prior look() call. "
+            "overlay, and 3D arm coordinates. Use this to discover and roughly locate "
+            "objects by description. Requires a prior look() call. "
             "Example queries: 'the red cup', 'the nearest object', 'the pen on the left'."
         ),
         "parameters": {
@@ -33,6 +32,30 @@ TOOL_DECLARATIONS = [
                 },
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "segment",
+        "description": (
+            "Run SAM2 point-prompt segmentation at a pixel coordinate. "
+            "Returns a mask overlay image and the 3D arm coordinates at the "
+            "exact pixel you specified. More precise than detect() — use this "
+            "to visually confirm you are targeting the right object before moving. "
+            "Requires a prior look() call."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pixel_x": {
+                    "type": "integer",
+                    "description": "X pixel coordinate to segment at (0 = left, 639 = right)",
+                },
+                "pixel_y": {
+                    "type": "integer",
+                    "description": "Y pixel coordinate to segment at (0 = top, 479 = bottom)",
+                },
+            },
+            "required": ["pixel_x", "pixel_y"],
         },
     },
     {
@@ -60,6 +83,118 @@ TOOL_DECLARATIONS = [
                 },
             },
             "required": ["pixel_x", "pixel_y"],
+        },
+    },
+    {
+        "name": "move_to_xyz",
+        "description": (
+            "Move the robot arm to an absolute position in arm coordinates (mm). "
+            "Z is ground-relative (0 = ground, positive = up). Use coordinates "
+            "from detect(), segment(), or pose_get(). Faster than goto_pixel "
+            "because it skips depth lookup."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number", "description": "X coordinate in mm (arm frame)"},
+                "y": {"type": "number", "description": "Y coordinate in mm (arm frame)"},
+                "z": {"type": "number", "description": "Z coordinate in mm, ground-relative (0 = ground, positive = up)"},
+            },
+            "required": ["x", "y", "z"],
+        },
+    },
+    {
+        "name": "move_relative",
+        "description": (
+            "Move the robot arm by a relative offset from its current position. "
+            "dx, dy, dz are in mm. Positive dz moves up, negative moves down. "
+            "Useful for fine adjustments, lateral sweeps, and step-by-step movements."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dx": {"type": "number", "description": "Relative X offset in mm"},
+                "dy": {"type": "number", "description": "Relative Y offset in mm"},
+                "dz": {"type": "number", "description": "Relative Z offset in mm (positive = up)"},
+            },
+            "required": ["dx", "dy", "dz"],
+        },
+    },
+    {
+        "name": "press_down",
+        "description": (
+            "Lower the arm downward with force monitoring. Descends until contact "
+            "is detected (torque exceeds threshold) or max distance reached. "
+            "Returns whether contact was made and final position. "
+            "Use for pressing, cutting, poking, and controlled descent."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_force": {
+                    "type": "integer",
+                    "description": "Force threshold (torque delta) to stop. Default 50 (light contact). Use 30 for delicate, 80 for firm.",
+                },
+                "max_distance_mm": {
+                    "type": "number",
+                    "description": "Maximum descent distance in mm (default 50).",
+                },
+            },
+        },
+    },
+    {
+        "name": "force_move",
+        "description": (
+            "Move the arm in a specified direction with force/torque monitoring. "
+            "Moves along the direction vector until contact is detected or max "
+            "distance reached. Use for pushing objects, lateral probing, and "
+            "directional force application. Direction is normalized internally."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dx": {"type": "number", "description": "Direction X component (will be normalized)"},
+                "dy": {"type": "number", "description": "Direction Y component (will be normalized)"},
+                "dz": {"type": "number", "description": "Direction Z component (will be normalized)"},
+                "max_force": {
+                    "type": "integer",
+                    "description": "Torque delta threshold (default 50)",
+                },
+                "max_distance_mm": {
+                    "type": "number",
+                    "description": "Maximum travel distance in mm (default 100)",
+                },
+            },
+            "required": ["dx", "dy", "dz"],
+        },
+    },
+    {
+        "name": "execute_trajectory",
+        "description": (
+            "Execute a smooth path through a sequence of XYZ waypoints at ~50Hz. "
+            "Use for cutting motions, wiping, drawing, or any continuous path. "
+            "Each waypoint is [x, y, z] in ground-relative arm coordinates (mm). "
+            "Space waypoints 5-10mm apart for smooth motion."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "waypoints": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "description": "List of [x, y, z] waypoints in mm. Minimum 2 waypoints.",
+                },
+                "force_threshold": {
+                    "type": "integer",
+                    "description": "If set, monitor torque and stop on contact. Use 80-100 (higher than press_down due to motion noise).",
+                },
+            },
+            "required": ["waypoints"],
         },
     },
     {
@@ -99,6 +234,19 @@ TOOL_DECLARATIONS = [
 ]
 
 
-def create_gemini_tools() -> list[types.Tool]:
-    """Create Gemini Tool objects from declarations."""
-    return [types.Tool(function_declarations=TOOL_DECLARATIONS)]
+def get_tool_declarations(has_sam2: bool = True, has_gemini_vision: bool = True) -> list[dict]:
+    """Get tool declarations filtered by available vision backends.
+
+    Args:
+        has_sam2: Whether SAM2 is available (enables segment tool).
+        has_gemini_vision: Whether Gemini ER vision is available (enables detect tool).
+
+    Returns:
+        Filtered list of tool declaration dicts.
+    """
+    exclude = set()
+    if not has_sam2:
+        exclude.add("segment")
+    if not has_gemini_vision:
+        exclude.add("detect")
+    return [t for t in TOOL_DECLARATIONS if t["name"] not in exclude]

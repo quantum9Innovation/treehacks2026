@@ -1,4 +1,4 @@
-"""AgentV3: Gemini Robotics ER 1.5 robot arm control orchestrator."""
+"""AgentV3: Multi-provider robot arm control orchestrator with dynamic actions."""
 
 import json
 import logging
@@ -9,8 +9,6 @@ from typing import Any
 import cv2
 import numpy as np
 import pyrealsense2 as rs
-from google import genai
-from google.genai import types
 
 from agent.camera import RealSenseCamera
 from agent.vlm_agent import ConfirmationHandler
@@ -19,9 +17,9 @@ from motion_controller.motion import Motion
 from agent_v2.calibration import DEFAULT_CALIBRATION_PATH
 from agent_v2.coordinate_transform import CoordinateTransform
 
-from .gemini_vision import GeminiVision
-from .prompts import SYSTEM_PROMPT, create_task_prompt
-from .tools import create_gemini_tools
+from .llm import LLMProvider, LLMResponse, ToolCall
+from .prompts import SYSTEM_PROMPT, create_system_prompt, create_task_prompt
+from .tools import get_tool_declarations
 
 logger = logging.getLogger("agent_v3")
 
@@ -29,39 +27,41 @@ logger = logging.getLogger("agent_v3")
 GRIPPER_SPEED = 100
 GRIPPER_ACC = 50
 
+# Tools that need user confirmation before execution
+CONFIRM_TOOLS = {
+    "goto_pixel", "move_home", "gripper_ctrl",
+    "move_to_xyz", "move_relative", "press_down",
+    "force_move", "execute_trajectory",
+}
+
+# Tools that count as movement (trigger post-movement camera capture)
+MOVEMENT_TOOLS = CONFIRM_TOOLS
+
 
 class AgentV3:
-    """Gemini Robotics ER-driven robot arm control agent.
+    """Multi-provider robot arm control agent with dynamic action capabilities.
 
-    Replaces both GPT-5.2 and SAM2 from AgentV2 with a single Gemini
-    Robotics ER 1.5 model that handles reasoning, tool-calling, and
-    spatial vision (detection, pointing, segmentation) natively.
+    Supports OpenAI GPT or Gemini ER for reasoning, SAM2 and/or Gemini ER
+    for vision, and force-controlled / trajectory-based dynamic actions.
     """
 
     def __init__(
         self,
-        google_api_key: str,
-        model: str = "gemini-robotics-er-1.5-preview",
+        provider: LLMProvider,
         arm_port: str | None = None,
         auto_confirm: bool = False,
         debug: bool = False,
-        thinking_budget: int = 1024,
         calibration_path: Path = DEFAULT_CALIBRATION_PATH,
+        sam2_backend: Any = None,
+        gemini_vision: Any = None,
     ):
         self.debug = debug
-        self.thinking_budget = thinking_budget
+        self.provider = provider
 
         if debug:
             logging.getLogger("agent_v3").setLevel(logging.DEBUG)
 
-        logger.info(f"Initializing AgentV3 with model={model}")
-
-        # Gemini client
-        self.client = genai.Client(api_key=google_api_key)
-        self.model = model
-
-        # Vision wrapper (uses same client)
-        self.vision = GeminiVision(self.client, model=model)
+        logger.info("Initializing AgentV3")
 
         # Hardware
         self.camera = RealSenseCamera()
@@ -74,10 +74,17 @@ class AgentV3:
         # Confirmation
         self.confirmation = ConfirmationHandler(auto_confirm=auto_confirm)
 
-        # Tools
-        self.tools = create_gemini_tools()
+        # Vision backends (both optional, can work in tandem)
+        self.sam2 = sam2_backend
+        self.gemini_vision = gemini_vision
 
-        # Frame cache (populated by look(), used by detect() and goto_pixel())
+        # Tool declarations (filtered by available vision)
+        self.tool_declarations = get_tool_declarations(
+            has_sam2=self.sam2 is not None,
+            has_gemini_vision=self.gemini_vision is not None,
+        )
+
+        # Frame cache (populated by look(), used by segment/detect/goto_pixel)
         self._last_color_image: np.ndarray | None = None
         self._last_depth_frame: rs.depth_frame | None = None
         self._last_depth_image: np.ndarray | None = None
@@ -110,19 +117,11 @@ class AgentV3:
     # ── Frame capture ──────────────────────────────────────────
 
     def _capture_aligned_frames(self) -> tuple[np.ndarray, np.ndarray, rs.depth_frame]:
-        """Capture aligned color + depth frames.
-
-        Returns:
-            color_image: BGR numpy array
-            depth_colorized: Colorized depth numpy array
-            depth_frame: Raw RealSense depth frame (for coordinate queries)
-        """
+        """Capture aligned color + depth frames."""
         if not self.camera._started:
             self.camera.start()
 
         frames = self.camera.pipeline.wait_for_frames()
-
-        # Align depth to color
         aligned = self.ct.get_aligned_frames(frames)
         color_frame = aligned.get_color_frame()
         depth_frame = aligned.get_depth_frame()
@@ -131,8 +130,6 @@ class AgentV3:
             raise RuntimeError("Failed to capture aligned frames")
 
         color_image = np.asanyarray(color_frame.get_data())
-
-        # Colorize depth for visualization
         colorized = self.camera.colorizer.colorize(depth_frame)
         depth_image = np.asanyarray(colorized.get_data())
         depth_image = self.camera._draw_depth_scale(
@@ -141,10 +138,10 @@ class AgentV3:
 
         return color_image, depth_image, depth_frame
 
-    def _encode_image_for_gemini(self, image: np.ndarray) -> types.Part:
-        """Encode a BGR numpy image as a JPEG Part for Gemini messages."""
-        _, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        return types.Part.from_bytes(data=jpeg.tobytes(), mime_type="image/jpeg")
+    def _encode_image(self, image: np.ndarray, quality: int = 85) -> bytes:
+        """Encode a BGR numpy image as JPEG bytes."""
+        _, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        return jpeg.tobytes()
 
     @staticmethod
     def _draw_coordinate_grid(image: np.ndarray) -> np.ndarray:
@@ -168,41 +165,45 @@ class AgentV3:
 
     # ── Tool executors ──────────────────────────────────────────
 
-    def _execute_look(self, _args: dict[str, Any]) -> tuple[str, list[types.Part]]:
-        """Execute look tool: capture frame, return images as Gemini Parts.
+    def _execute_look(self, _args: dict[str, Any]) -> tuple[str, list[dict]]:
+        """Execute look tool: capture frame, return images.
 
-        Returns (text_result, image_parts).
+        Returns (text_result, image_content_blocks).
+        Image blocks are dicts: {"type": "image", "data": bytes, "mime_type": str}
+        or {"type": "text", "text": str}.
         """
         color_image, depth_image, depth_frame = self._capture_aligned_frames()
 
-        # Cache for subsequent detect() / goto_pixel() calls
+        # Cache for subsequent tool calls
         self._last_color_image = color_image
         self._last_depth_frame = depth_frame
         self._last_depth_image = depth_image
 
-        h, w = color_image.shape[:2]
-        text_result = f"Camera frame captured ({w}x{h}). Ready for detect() queries."
+        # Encode for SAM2 if available
+        if self.sam2 is not None:
+            print("Encoding image for SAM2...")
+            encode_time = self.sam2.set_image(color_image)
+            text_result = (
+                f"Camera frame captured (640x480). "
+                f"SAM2 image encoded in {encode_time:.1f}s. "
+                f"Ready for segment() and detect() queries."
+            )
+        else:
+            text_result = "Camera frame captured (640x480). Ready for detect() queries."
 
         # Draw coordinate grid on a copy
         color_with_grid = self._draw_coordinate_grid(color_image)
-        color_part = self._encode_image_for_gemini(color_with_grid)
-        depth_part = self._encode_image_for_gemini(depth_image)
 
-        image_parts = [
-            color_part,
-            types.Part.from_text(
-                text="[Camera image with coordinate grid (labels every 80px). Depth image below.]"
-            ),
-            depth_part,
+        image_content = [
+            {"type": "image", "data": self._encode_image(color_with_grid), "mime_type": "image/jpeg"},
+            {"type": "text", "text": "[Camera image with coordinate grid (labels every 80px). Depth image below.]"},
+            {"type": "image", "data": self._encode_image(depth_image), "mime_type": "image/jpeg"},
         ]
 
-        return text_result, image_parts
+        return text_result, image_content
 
-    def _execute_detect(self, args: dict[str, Any]) -> tuple[str, list[types.Part]]:
-        """Execute detect tool: Gemini ER segmentation with natural language query.
-
-        Returns (text_result, image_parts).
-        """
+    def _execute_detect(self, args: dict[str, Any]) -> tuple[str, list[dict]]:
+        """Execute detect tool: Gemini ER segmentation with natural language query."""
         query = args["query"]
 
         if self._last_color_image is None or self._last_depth_frame is None:
@@ -213,9 +214,14 @@ class AgentV3:
                 }
             ), []
 
-        # Run Gemini ER segmentation
+        if self.gemini_vision is None:
+            return json.dumps({
+                "status": "error",
+                "message": "Gemini vision not available.",
+            }), []
+
         print(f"Detecting: {query!r}...")
-        segments = self.vision.segment(self._last_color_image, query)
+        segments = self.gemini_vision.segment(self._last_color_image, query)
 
         if not segments:
             return json.dumps(
@@ -225,7 +231,6 @@ class AgentV3:
                 }
             ), []
 
-        # Use the first (best) result
         seg = segments[0]
         bbox_px = seg.get("box_2d_px", (0, 0, 0, 0))
         label = seg.get("label", query)
@@ -248,7 +253,6 @@ class AgentV3:
                         "z": round(float(arm_3d[2]), 1),
                     }
 
-        # Get mask if available
         mask = seg.get("mask_full")
         mask_area = int(mask.sum()) if mask is not None else 0
 
@@ -274,17 +278,81 @@ class AgentV3:
         annotated = self._annotate_detection(
             self._last_color_image, mask, bbox_px, (cx, cy), label
         )
-        annotated_part = self._encode_image_for_gemini(annotated)
 
-        image_parts = [
-            annotated_part,
-            types.Part.from_text(
-                text=f"[Detection result for '{query}'. Label: {label}, "
+        image_content = [
+            {"type": "image", "data": self._encode_image(annotated), "mime_type": "image/jpeg"},
+            {"type": "text", "text": (
+                f"[Detection result for '{query}'. Label: {label}, "
                 f"Centroid: ({cx},{cy}), Mask area: {mask_area}px]"
-            ),
+            )},
         ]
 
-        return text_result, image_parts
+        return text_result, image_content
+
+    def _execute_segment(self, args: dict[str, Any]) -> tuple[str, list[dict]]:
+        """Execute segment tool: SAM2 point-prompt segmentation."""
+        pixel_x = args["pixel_x"]
+        pixel_y = args["pixel_y"]
+
+        if self._last_color_image is None or self._last_depth_frame is None:
+            return json.dumps({
+                "status": "error",
+                "message": "No image available. Call look() first.",
+            }), []
+
+        if self.sam2 is None:
+            return json.dumps({
+                "status": "error",
+                "message": "SAM2 not available.",
+            }), []
+
+        print(f"Running SAM2 segmentation at ({pixel_x}, {pixel_y})...")
+        t0 = time.time()
+        mask, score, bbox = self.sam2.segment_point(pixel_x, pixel_y)
+        seg_time = time.time() - t0
+        logger.info(f"SAM2 segmentation in {seg_time:.2f}s, score={score:.3f}")
+
+        # Compute 3D arm coordinates from the exact click pixel
+        arm_coords = None
+        depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, pixel_x, pixel_y)
+        if depth_mm is not None:
+            cam_3d = self.ct.deproject_pixel(pixel_x, pixel_y, depth_mm=depth_mm)
+            if cam_3d is not None:
+                arm_3d = self.ct.camera_to_arm(cam_3d)
+                if arm_3d is not None:
+                    arm_coords = {
+                        "x": round(float(arm_3d[0]), 1),
+                        "y": round(float(arm_3d[1]), 1),
+                        "z": round(float(arm_3d[2]), 1),
+                    }
+
+        result = {
+            "status": "success",
+            "click": {"pixel_x": pixel_x, "pixel_y": pixel_y},
+            "score": round(score, 3),
+            "bbox": {"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3]},
+            "mask_area_px": int(mask.sum()),
+            "depth_mm": round(depth_mm, 1) if depth_mm else None,
+            "arm_coordinates": arm_coords,
+            "segment_time_s": round(seg_time, 2),
+        }
+
+        text_result = json.dumps(result)
+
+        # Draw annotation overlay
+        annotated = self._annotate_segmentation(
+            self._last_color_image, mask, bbox, (pixel_x, pixel_y)
+        )
+
+        image_content = [
+            {"type": "image", "data": self._encode_image(annotated), "mime_type": "image/jpeg"},
+            {"type": "text", "text": (
+                f"[Segmentation mask overlay. Click target: ({pixel_x},{pixel_y}), "
+                f"Score: {score:.3f}]"
+            )},
+        ]
+
+        return text_result, image_content
 
     def _annotate_detection(
         self,
@@ -297,23 +365,17 @@ class AgentV3:
         """Draw detection annotation on the image."""
         annotated = color_image.copy()
 
-        # Green mask overlay (semi-transparent) if mask is available
         if mask is not None and mask.any():
             green_overlay = annotated.copy()
             green_overlay[mask] = [0, 200, 0]
             cv2.addWeighted(green_overlay, 0.4, annotated, 0.6, 0, annotated)
-
-            # Contour outline
             contours, _ = cv2.findContours(
                 mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
             cv2.drawContours(annotated, contours, -1, (0, 255, 0), 2)
 
-        # Bounding box
         x1, y1, x2, y2 = bbox
         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 1)
-
-        # Label
         cv2.putText(
             annotated,
             label,
@@ -324,51 +386,63 @@ class AgentV3:
             1,
         )
 
-        # Centroid dot (blue)
         mx, my = centroid
         cv2.circle(annotated, (mx, my), 6, (255, 0, 0), -1)
         cv2.circle(annotated, (mx, my), 6, (255, 255, 255), 1)
 
-        # Coordinate grid
         annotated = self._draw_coordinate_grid(annotated)
-
         return annotated
 
+    def _annotate_segmentation(
+        self,
+        color_image: np.ndarray,
+        mask: np.ndarray,
+        bbox: tuple[int, int, int, int],
+        click: tuple[int, int],
+    ) -> np.ndarray:
+        """Draw segmentation annotation on the image (ported from V2)."""
+        annotated = color_image.copy()
+
+        green_overlay = annotated.copy()
+        green_overlay[mask] = [0, 200, 0]
+        cv2.addWeighted(green_overlay, 0.4, annotated, 0.6, 0, annotated)
+
+        contours, _ = cv2.findContours(
+            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        cv2.drawContours(annotated, contours, -1, (0, 255, 0), 2)
+
+        x1, y1, x2, y2 = bbox
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 1)
+
+        cx, cy = click
+        cv2.drawMarker(annotated, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
+
+        annotated = self._draw_coordinate_grid(annotated)
+        return annotated
+
+    # ── Movement tool executors ────────────────────────────────
+
     def _execute_goto_pixel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Execute goto_pixel tool: pixel -> depth -> deproject -> affine -> move."""
+        """Execute goto_pixel: pixel -> depth -> deproject -> affine -> move."""
         pixel_x = args["pixel_x"]
         pixel_y = args["pixel_y"]
         z_offset_mm = args.get("z_offset_mm", 50)
 
         if self._last_depth_frame is None:
-            return {
-                "status": "error",
-                "message": "No depth frame available. Call look() first.",
-            }
+            return {"status": "error", "message": "No depth frame available. Call look() first."}
 
-        # Get depth at pixel
         depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, pixel_x, pixel_y)
         if depth_mm is None:
-            return {
-                "status": "error",
-                "message": f"No depth at pixel ({pixel_x}, {pixel_y}) — surface may be too close/far.",
-            }
+            return {"status": "error", "message": f"No depth at pixel ({pixel_x}, {pixel_y})."}
 
-        # Deproject to camera 3D
         cam_3d = self.ct.deproject_pixel(pixel_x, pixel_y, depth_mm=depth_mm)
         if cam_3d is None:
-            return {
-                "status": "error",
-                "message": f"Deprojection failed at ({pixel_x}, {pixel_y}).",
-            }
+            return {"status": "error", "message": f"Deprojection failed at ({pixel_x}, {pixel_y})."}
 
-        # Transform to arm coordinates
         arm_3d = self.ct.camera_to_arm(cam_3d)
         if arm_3d is None:
-            return {
-                "status": "error",
-                "message": "Camera-to-arm transform failed. Calibration may be missing.",
-            }
+            return {"status": "error", "message": "Camera-to-arm transform failed."}
 
         target_x = float(arm_3d[0])
         target_y = float(arm_3d[1])
@@ -378,25 +452,114 @@ class AgentV3:
         if ok:
             return {
                 "status": "success",
-                "message": (
-                    f"Moved to pixel ({pixel_x},{pixel_y}) -> "
-                    f"arm x={target_x:.0f}, y={target_y:.0f}, z={target_z:.0f}"
-                ),
+                "message": f"Moved to pixel ({pixel_x},{pixel_y}) -> arm x={target_x:.0f}, y={target_y:.0f}, z={target_z:.0f}",
                 "pixel": {"x": pixel_x, "y": pixel_y},
-                "arm_position": {
-                    "x": round(target_x, 1),
-                    "y": round(target_y, 1),
-                    "z": round(target_z, 1),
-                },
+                "arm_position": {"x": round(target_x, 1), "y": round(target_y, 1), "z": round(target_z, 1)},
             }
-        else:
+        return {"status": "error", "message": f"Position ({target_x:.0f}, {target_y:.0f}, {target_z:.0f}) unreachable"}
+
+    def _execute_move_to_xyz(self, args: dict[str, Any]) -> dict[str, Any]:
+        x, y, z = args["x"], args["y"], args["z"]
+        ok = self.motion.move_to(x, y, z)
+        if ok:
+            final = self.motion.get_pose()
             return {
-                "status": "error",
-                "message": (
-                    f"move_to failed — position ({target_x:.0f}, {target_y:.0f}, {target_z:.0f}) "
-                    "may be unreachable"
-                ),
+                "status": "success",
+                "message": f"Moved to ({x:.0f}, {y:.0f}, {z:.0f})",
+                "position": {"x": round(final[0], 1), "y": round(final[1], 1), "z": round(final[2], 1)},
             }
+        return {"status": "error", "message": f"Position ({x:.0f}, {y:.0f}, {z:.0f}) unreachable"}
+
+    def _execute_move_relative(self, args: dict[str, Any]) -> dict[str, Any]:
+        dx, dy, dz = args["dx"], args["dy"], args["dz"]
+        ok = self.motion.move_relative(dx, dy, dz)
+        if ok:
+            final = self.motion.get_pose()
+            return {
+                "status": "success",
+                "message": f"Moved relative ({dx:.0f}, {dy:.0f}, {dz:.0f})",
+                "position": {"x": round(final[0], 1), "y": round(final[1], 1), "z": round(final[2], 1)},
+            }
+        return {"status": "error", "message": f"Relative move ({dx:.0f}, {dy:.0f}, {dz:.0f}) failed"}
+
+    def _execute_press_down(self, args: dict[str, Any]) -> dict[str, Any]:
+        max_force = args.get("max_force", 50)
+        max_dist = args.get("max_distance_mm", 50.0)
+        result = self.motion.force_move(
+            direction=(0, 0, -1),
+            max_force=max_force,
+            max_distance_mm=max_dist,
+        )
+        return {
+            "status": "success",
+            "contact": result["contact"],
+            "distance_mm": result["distance_mm"],
+            "max_torque_delta": result["max_torque_delta"],
+            "position": {
+                "x": round(result["final_position"][0], 1),
+                "y": round(result["final_position"][1], 1),
+                "z": round(result["final_position"][2], 1),
+            },
+            "message": (
+                f"{'Contact detected' if result['contact'] else 'No contact'} "
+                f"after {result['distance_mm']:.1f}mm descent"
+            ),
+        }
+
+    def _execute_force_move(self, args: dict[str, Any]) -> dict[str, Any]:
+        dx, dy, dz = args["dx"], args["dy"], args["dz"]
+        max_force = args.get("max_force", 50)
+        max_dist = args.get("max_distance_mm", 100.0)
+        result = self.motion.force_move(
+            direction=(dx, dy, dz),
+            max_force=max_force,
+            max_distance_mm=max_dist,
+        )
+        return {
+            "status": "success",
+            "contact": result["contact"],
+            "distance_mm": result["distance_mm"],
+            "max_torque_delta": result["max_torque_delta"],
+            "position": {
+                "x": round(result["final_position"][0], 1),
+                "y": round(result["final_position"][1], 1),
+                "z": round(result["final_position"][2], 1),
+            },
+            "message": (
+                f"{'Contact detected' if result['contact'] else 'Distance exhausted'} "
+                f"after {result['distance_mm']:.1f}mm travel "
+                f"(peak torque delta: {result['max_torque_delta']})"
+            ),
+        }
+
+    def _execute_trajectory(self, args: dict[str, Any]) -> dict[str, Any]:
+        waypoints_raw = args["waypoints"]
+        force_threshold = args.get("force_threshold")
+
+        waypoints = [(w[0], w[1], w[2]) for w in waypoints_raw]
+
+        if len(waypoints) < 2:
+            return {"status": "error", "message": "At least 2 waypoints required"}
+
+        result = self.motion.follow_trajectory(
+            waypoints, force_threshold=force_threshold
+        )
+        return {
+            "status": "success" if result["completed"] else "partial",
+            "completed": result["completed"],
+            "waypoints_executed": result["waypoints_executed"],
+            "total_waypoints": len(waypoints),
+            "contact": result.get("contact", False),
+            "position": {
+                "x": round(result["final_position"][0], 1),
+                "y": round(result["final_position"][1], 1),
+                "z": round(result["final_position"][2], 1),
+            },
+            "message": (
+                f"Executed {result['waypoints_executed']}/{len(waypoints)} waypoints"
+                + (f" (stopped: contact)" if result.get("contact") else "")
+            ),
+        }
 
     def _execute_pose_get(self, _args: dict[str, Any]) -> dict[str, Any]:
         x, y, z = self.motion.get_pose()
@@ -424,49 +587,28 @@ class AgentV3:
             "message": f"Gripper {state} at {angle} degrees",
         }
 
+    # ── Tool dispatch ──────────────────────────────────────────
+
     def _execute_tool(
         self, name: str, args: dict[str, Any]
-    ) -> tuple[dict[str, Any] | str, list[types.Part] | None]:
-        """Execute a tool call. Returns (result, optional_image_parts)."""
-        # look and detect return images, no confirmation needed
+    ) -> tuple[dict[str, Any] | str, list[dict] | None]:
+        """Execute a tool call. Returns (result, optional_image_content_blocks)."""
+        # Vision tools return images, no confirmation needed
         if name == "look":
             print("Capturing camera frame...")
-            text_result, images = self._execute_look(args)
-            return text_result, images
+            return self._execute_look(args)
 
         if name == "detect":
             print(f"Detecting: {args.get('query', '?')}...")
-            text_result, images = self._execute_detect(args)
-            return text_result, images
+            return self._execute_detect(args)
+
+        if name == "segment":
+            print(f"Segmenting at ({args.get('pixel_x')}, {args.get('pixel_y')})...")
+            return self._execute_segment(args)
 
         # Confirmation for movement tools
-        needs_confirm = name in ["goto_pixel", "move_home", "gripper_ctrl"]
-        if needs_confirm and not self.confirmation.auto_confirm:
-            if name == "goto_pixel":
-                px, py = args["pixel_x"], args["pixel_y"]
-                z_off = args.get("z_offset_mm", 50)
-                arm_desc = ""
-                if self._last_depth_frame is not None:
-                    depth_mm = self.ct.get_depth_at_pixel(
-                        self._last_depth_frame, px, py
-                    )
-                    if depth_mm is not None:
-                        cam_3d = self.ct.deproject_pixel(px, py, depth_mm=depth_mm)
-                        if cam_3d is not None:
-                            arm_3d = self.ct.camera_to_arm(cam_3d)
-                            if arm_3d is not None:
-                                arm_desc = (
-                                    f" -> arm x={arm_3d[0]:.0f}, y={arm_3d[1]:.0f}, "
-                                    f"z={float(arm_3d[2]) + z_off:.0f}"
-                                )
-                action_str = f"GOTO pixel ({px},{py}) z_offset={z_off}mm{arm_desc}"
-            elif name == "move_home":
-                action_str = "MOVE ARM to HOME position"
-            elif name == "gripper_ctrl":
-                state = "OPEN" if args["angle"] > 45 else "CLOSE"
-                action_str = f"GRIPPER {state} to {args['angle']:.1f} degrees"
-            else:
-                action_str = f"Execute {name} with args: {json.dumps(args)}"
+        if name in CONFIRM_TOOLS and not self.confirmation.auto_confirm:
+            action_str = self._format_action(name, args)
 
             print("\n" + "=" * 50)
             print("PENDING ACTION:")
@@ -486,6 +628,11 @@ class AgentV3:
 
         executors = {
             "goto_pixel": self._execute_goto_pixel,
+            "move_to_xyz": self._execute_move_to_xyz,
+            "move_relative": self._execute_move_relative,
+            "press_down": self._execute_press_down,
+            "force_move": self._execute_force_move,
+            "execute_trajectory": self._execute_trajectory,
             "pose_get": self._execute_pose_get,
             "move_home": self._execute_move_home,
             "gripper_ctrl": self._execute_gripper_ctrl,
@@ -502,35 +649,52 @@ class AgentV3:
         except Exception as e:
             return {"status": "error", "message": str(e)}, None
 
+    def _format_action(self, name: str, args: dict[str, Any]) -> str:
+        """Format a pending action for display."""
+        if name == "goto_pixel":
+            px, py = args["pixel_x"], args["pixel_y"]
+            z_off = args.get("z_offset_mm", 50)
+            arm_desc = ""
+            if self._last_depth_frame is not None:
+                depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, px, py)
+                if depth_mm is not None:
+                    cam_3d = self.ct.deproject_pixel(px, py, depth_mm=depth_mm)
+                    if cam_3d is not None:
+                        arm_3d = self.ct.camera_to_arm(cam_3d)
+                        if arm_3d is not None:
+                            arm_desc = f" -> arm x={arm_3d[0]:.0f}, y={arm_3d[1]:.0f}, z={float(arm_3d[2]) + z_off:.0f}"
+            return f"GOTO pixel ({px},{py}) z_offset={z_off}mm{arm_desc}"
+        elif name == "move_to_xyz":
+            return f"MOVE ARM to ({args['x']:.0f}, {args['y']:.0f}, {args['z']:.0f})"
+        elif name == "move_relative":
+            return f"MOVE ARM relative ({args['dx']:.0f}, {args['dy']:.0f}, {args['dz']:.0f})"
+        elif name == "press_down":
+            return f"PRESS DOWN max_force={args.get('max_force', 50)} max_dist={args.get('max_distance_mm', 50)}mm"
+        elif name == "force_move":
+            return f"FORCE MOVE dir=({args['dx']:.0f},{args['dy']:.0f},{args['dz']:.0f}) max_force={args.get('max_force', 50)}"
+        elif name == "execute_trajectory":
+            n = len(args.get("waypoints", []))
+            return f"EXECUTE TRAJECTORY with {n} waypoints"
+        elif name == "move_home":
+            return "MOVE ARM to HOME position"
+        elif name == "gripper_ctrl":
+            state = "OPEN" if args["angle"] > 45 else "CLOSE"
+            return f"GRIPPER {state} to {args['angle']:.1f} degrees"
+        return f"Execute {name} with args: {json.dumps(args)}"
+
     # ── Agent loop ──────────────────────────────────────────────
 
     def process_task(self, task: str) -> str:
-        """Process a task using the Gemini ER agent loop."""
+        """Process a task using the agent loop (provider-agnostic)."""
         logger.info(f"Processing task: {task}")
 
+        system_prompt = create_system_prompt(
+            has_sam2=self.sam2 is not None,
+            has_gemini_vision=self.gemini_vision is not None,
+        )
         task_prompt = create_task_prompt(task)
 
-        # Gemini has no "system" role — inject system prompt via initial exchange
-        contents: list[types.Content] = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=SYSTEM_PROMPT)],
-            ),
-            types.Content(
-                role="model",
-                parts=[
-                    types.Part.from_text(
-                        text="Understood. I'm ready to control the robot arm using my vision "
-                        "and tool-calling capabilities. Give me a task and I'll start by "
-                        "looking at the scene."
-                    )
-                ],
-            ),
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=task_prompt)],
-            ),
-        ]
+        messages = self.provider.create_messages(system_prompt, task_prompt)
 
         max_iterations = 10
         iteration = 0
@@ -540,104 +704,72 @@ class AgentV3:
             print(f"\n--- Agent iteration {iteration} ---")
 
             try:
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        tools=self.tools,
-                        temperature=0.3,
-                        thinking_config=types.ThinkingConfig(
-                            thinking_budget=self.thinking_budget
-                        ),
-                    ),
-                )
+                response = self.provider.chat(messages, self.tool_declarations)
             except Exception as e:
                 logger.error(f"API call failed: {e}")
                 raise
 
-            if not response.candidates:
-                logger.warning("No candidates in response")
-                return "Model returned empty response."
-
-            candidate = response.candidates[0]
-            model_parts = (candidate.content and candidate.content.parts) or []
-
-            if not model_parts:
-                logger.warning("Empty parts in response")
-                return "Model returned empty response."
-
-            # Collect text output
-            text_output = ""
-            for part in model_parts:
-                if part.text:
-                    text_output += part.text
-
-            if text_output:
-                print(f"\nAgent: {text_output}")
+            if response.text:
+                print(f"\nAgent: {response.text}")
 
             # Add model response to conversation
-            contents.append(candidate.content)
+            self.provider.append_assistant_response(messages, response)
 
-            # Check for function calls
-            function_calls = [p for p in model_parts if p.function_call]
-
-            if not function_calls:
-                # No tool calls — model is done
-                return text_output or "Task completed."
+            if not response.tool_calls:
+                return response.text or "Task completed."
 
             # Execute tool calls
             movement_executed = False
-            pending_image_parts: list[types.Part] = []
-            function_response_parts: list[types.Part] = []
+            pending_image_blocks: list[dict] = []
 
-            for part in function_calls:
-                fc = part.function_call
-                name = fc.name
-                args = dict(fc.args) if fc.args else {}
-
-                result, images = self._execute_tool(name, args)
+            for tc in response.tool_calls:
+                result, images = self._execute_tool(tc.name, tc.args)
                 result_str = result if isinstance(result, str) else json.dumps(result)
                 print(f"Result: {result_str[:200]}")
 
-                function_response_parts.append(
-                    types.Part.from_function_response(
-                        name=name,
-                        response={"result": result_str},
-                    )
-                )
+                self.provider.append_tool_result(messages, tc, result_str)
 
                 if images:
-                    pending_image_parts.extend(images)
+                    pending_image_blocks.extend(images)
 
-                if name in ["goto_pixel", "move_home", "gripper_ctrl"]:
+                if tc.name in MOVEMENT_TOOLS:
                     result_dict = result if isinstance(result, dict) else {}
                     if result_dict.get("status") == "success":
                         movement_executed = True
 
-            # Add function responses as a user turn
-            contents.append(types.Content(role="user", parts=function_response_parts))
-
-            # Add images from look/detect as a separate user message
-            if pending_image_parts:
-                contents.append(types.Content(role="user", parts=pending_image_parts))
+            # Add images from look/detect/segment as a separate user message
+            if pending_image_blocks:
+                encoded_parts = []
+                for block in pending_image_blocks:
+                    if block["type"] == "image":
+                        encoded_parts.append(
+                            self.provider.encode_image(block["data"], block["mime_type"])
+                        )
+                    elif block["type"] == "text":
+                        encoded_parts.append(
+                            self.provider.encode_text(block["text"])
+                        )
+                self.provider.append_images(messages, encoded_parts)
 
             # After movement, capture a fresh view for verification
             if movement_executed:
                 print("Capturing post-movement view...")
                 time.sleep(0.5)
-                text_result, image_parts = self._execute_look({})
+                text_result, image_blocks = self._execute_look({})
 
-                contents.append(
-                    types.Content(
-                        role="user",
-                        parts=[
-                            *image_parts,
-                            types.Part.from_text(
-                                text="[Updated view after movement. "
-                                "Confirm task completion or continue if more actions needed.]"
-                            ),
-                        ],
-                    )
+                encoded_parts = []
+                for block in image_blocks:
+                    if block["type"] == "image":
+                        encoded_parts.append(
+                            self.provider.encode_image(block["data"], block["mime_type"])
+                        )
+                    elif block["type"] == "text":
+                        encoded_parts.append(
+                            self.provider.encode_text(block["text"])
+                        )
+                self.provider.append_images(
+                    messages, encoded_parts,
+                    text="[Updated view after movement. Confirm task completion or continue if more actions needed.]"
                 )
 
         return "Maximum iterations reached. Task may be incomplete."
@@ -648,8 +780,17 @@ class AgentV3:
         """Run the agent in interactive mode."""
         self.start()
 
+        provider_name = type(self.provider).__name__
+        vision_parts = []
+        if self.sam2 is not None:
+            vision_parts.append("SAM2")
+        if self.gemini_vision is not None:
+            vision_parts.append("Gemini ER")
+        vision_str = " + ".join(vision_parts) if vision_parts else "none"
+
         print("\n" + "=" * 60)
-        print("Agent V3 - Gemini Robotics ER Interactive Mode")
+        print(f"Agent V3 - Interactive Mode")
+        print(f"  LLM: {provider_name} | Vision: {vision_str}")
         print("=" * 60)
         print("Commands:")
         print("  quit       - Exit the agent")
@@ -722,13 +863,7 @@ class AgentV3:
             print(f"Calibration failed: {e}")
 
     def _run_touch_debug(self) -> None:
-        """Interactive touch debug: click a point, arm moves there, then resets.
-
-        Shows side-by-side color + depth. Click on either image to pick a
-        target. The pixel is deprojected to 3D, transformed to arm
-        coordinates, and the arm moves there. After a pause, the arm
-        returns home and waits for the next click. Press 'q' to exit.
-        """
+        """Interactive touch debug: click a point, arm moves there, then resets."""
         if not self.ct.has_calibration:
             print(
                 "ERROR: Touch debug requires calibration.\n"
