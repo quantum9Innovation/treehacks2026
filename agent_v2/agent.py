@@ -258,14 +258,14 @@ class AgentV2:
         seg_time = time.time() - t0
         logger.info(f"SAM2 segmentation in {seg_time:.2f}s, score={score:.3f}")
 
-        # Compute centroid
-        cx, cy = self.sam2.mask_centroid(mask)
+        # # Compute centroid (commented out — using exact click coordinates instead)
+        # cx, cy = self.sam2.mask_centroid(mask)
 
-        # Compute 3D arm coordinates from centroid
+        # Compute 3D arm coordinates from the exact click pixel
         arm_coords = None
-        depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, cx, cy)
+        depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, pixel_x, pixel_y)
         if depth_mm is not None:
-            cam_3d = self.ct.deproject_pixel(cx, cy, depth_mm=depth_mm)
+            cam_3d = self.ct.deproject_pixel(pixel_x, pixel_y, depth_mm=depth_mm)
             if cam_3d is not None:
                 arm_3d = self.ct.camera_to_arm(cam_3d)
                 if arm_3d is not None:
@@ -278,7 +278,6 @@ class AgentV2:
         result = {
             "status": "success",
             "click": {"pixel_x": pixel_x, "pixel_y": pixel_y},
-            "centroid": {"pixel_x": cx, "pixel_y": cy},
             "score": round(score, 3),
             "bbox": {"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3]},
             "mask_area_px": int(mask.sum()),
@@ -291,7 +290,7 @@ class AgentV2:
 
         # Draw annotation overlay
         annotated = self._annotate_segmentation(
-            self._last_color_image, mask, bbox, (pixel_x, pixel_y), (cx, cy)
+            self._last_color_image, mask, bbox, (pixel_x, pixel_y)
         )
         annotated_b64 = self._encode_image(annotated)
 
@@ -306,8 +305,8 @@ class AgentV2:
             {
                 "type": "text",
                 "text": (
-                    f"[Segmentation mask overlay. Click: ({pixel_x},{pixel_y}), "
-                    f"Centroid: ({cx},{cy}), Score: {score:.3f}]"
+                    f"[Segmentation mask overlay. Click target: ({pixel_x},{pixel_y}), "
+                    f"Score: {score:.3f}]"
                 ),
             },
         ]
@@ -320,15 +319,13 @@ class AgentV2:
         mask: np.ndarray,
         bbox: tuple[int, int, int, int],
         click: tuple[int, int],
-        centroid: tuple[int, int],
     ) -> np.ndarray:
         """Draw segmentation annotation on the image.
 
         - Green semi-transparent mask overlay
         - Green contour outline
         - Green bounding box
-        - Red crosshair at click point
-        - Blue dot at centroid
+        - Red crosshair at click point (exact target location)
         """
         annotated = color_image.copy()
 
@@ -347,14 +344,14 @@ class AgentV2:
         x1, y1, x2, y2 = bbox
         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 1)
 
-        # Click crosshair (red)
+        # Click crosshair (red) — this is the exact target location
         cx, cy = click
         cv2.drawMarker(annotated, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
 
-        # Centroid dot (blue)
-        mx, my = centroid
-        cv2.circle(annotated, (mx, my), 6, (255, 0, 0), -1)
-        cv2.circle(annotated, (mx, my), 6, (255, 255, 255), 1)
+        # # Centroid dot (blue) — commented out, using exact click coords instead
+        # mx, my = centroid
+        # cv2.circle(annotated, (mx, my), 6, (255, 0, 0), -1)
+        # cv2.circle(annotated, (mx, my), 6, (255, 255, 255), 1)
 
         # Coordinate grid so the LLM can evaluate positions
         annotated = self._draw_coordinate_grid(annotated)

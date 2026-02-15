@@ -16,9 +16,9 @@ TOOL_DECLARATIONS = [
         "name": "segment",
         "description": (
             "Run SAM2 point-prompt segmentation at a pixel coordinate. "
-            "Returns a mask overlay image, the mask's centroid pixel, and the "
-            "corresponding 3D arm coordinates. Use this to precisely locate an "
-            "object before moving to it. Requires a prior look() call."
+            "Returns a mask overlay image and the 3D arm coordinates at the "
+            "exact pixel you specified. Use this to visually confirm you are "
+            "targeting the right object before moving. Requires a prior look() call."
         ),
         "parameters": {
             "type": "object",
