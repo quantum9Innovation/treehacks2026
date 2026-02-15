@@ -126,26 +126,26 @@ def helix(monitor_arm, right_arm, back_arm, left_arm):
     delay = data["delay"]
 
     for x, y, z, t in stream:
-        monitor_arm.pose_ctrl([x, y, z, t])
-        back_arm.pose_ctrl([100, 0, 75, 0])
         right_arm.pose_ctrl([x, y, z, t])
         left_arm.pose_ctrl([x, y, z, t])
+        monitor_arm.pose_ctrl([x, y, z, t])
+        back_arm.pose_ctrl([100, 0, 75, 0])
         time.sleep(delay)
 
 
 def main():
-    port_right = "/dev/ttyUSB0"
-    back_port = "/dev/ttyUSB1"
-    port_monitor = "/dev/ttyUSB2"
+    back_port = "/dev/ttyUSB0"
+    right_port = "/dev/ttyUSB1"
+    monitor_port = "/dev/ttyUSB2"
     left_port = "/dev/ttyUSB3"
-    ports = [port_right, back_port, port_monitor, left_port]
+    ports = [right_port, back_port, monitor_port, left_port]
 
     if len(ports) == 0:
         print("Error: No USB serial device found. Connect the arm or use --port.")
         sys.exit(1)
 
     print(f"Connecting to RoArm-M2 on {ports}...")
-    right_arm = roarm(roarm_type="roarm_m2", port=port_right, baudrate=115200)
+    right_arm = roarm(roarm_type="roarm_m2", port=right_port, baudrate=115200)
     right_arm.echo_set(0)
     right_arm.torque_set(1)
 
@@ -153,7 +153,7 @@ def main():
     back_arm.echo_set(0)
     back_arm.torque_set(1)
 
-    monitor_arm = roarm(roarm_type="roarm_m2", port=port_monitor, baudrate=115200)
+    monitor_arm = roarm(roarm_type="roarm_m2", port=monitor_port, baudrate=115200)
     monitor_arm.echo_set(0)
     monitor_arm.torque_set(1)
 
