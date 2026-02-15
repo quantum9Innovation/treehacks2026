@@ -49,6 +49,8 @@
             ps.mypy
             ps.keyboard
             ps.websockets
+            ps.flask
+            ps.opencv4
             roarm_sdk
           ]
         );
