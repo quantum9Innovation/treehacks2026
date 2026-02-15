@@ -124,8 +124,8 @@ namespace Helix
 
 def radius : Millimeters := 100
 def turns : Nat := 4
-def height : Millimeters := 275
-def samplesPerTurn : Nat := 50
+def height : Millimeters := 140
+def samplesPerTurn : Nat := 25
 def nSamples : Nat := turns * samplesPerTurn
 def parametricBounds : Bounds := {min := 0, max := Float.ofNat turns}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
