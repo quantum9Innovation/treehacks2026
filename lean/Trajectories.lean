@@ -39,15 +39,15 @@ end Wave
 -- spring
 namespace Spring
 
-def radius : Millimeters := 250
-def amplitude : Millimeters := 400
+def tilt : Millimeters := 45
+def amplitude : Millimeters := 100
 def frequency : Hertz := 1.5
 def phaseShift : Float := 0
 def nSamples : Nat := 200
 def parametricBounds : Bounds := {min := 0, max := 9 / frequency}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def springPlane : Traceable2D :=
-  Math.spring radius amplitude frequency phaseShift
+  Math.spring tilt amplitude frequency phaseShift
 def planeSamples : List Point2D := Utils.dualize <| tSamples.map springPlane
 
 end Spring
