@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
 
     # Close WebRTC peer connections first
     from .routers.camera import _pcs
+
     for pc in list(_pcs):
         try:
             await pc.close()
@@ -78,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .routers.calibration import router as calibration_router
     from .routers.camera import router as camera_router
     from .routers.vision import router as vision_router
+
     app.include_router(arm_router)
     app.include_router(camera_router)
     app.include_router(vision_router)
@@ -127,6 +129,7 @@ def main():
         # Watchdog: force-kill after 5s if graceful shutdown hangs
         def _watchdog():
             import time
+
             time.sleep(5)
             logger.warning("Shutdown timed out after 5s, forcing exit")
             os._exit(1)

@@ -25,7 +25,7 @@ export function useAgentChat() {
     setIsProcessing(true)
 
     try {
-      await agentApi.submitTask(task)
+      await agentApi.submitTask(task, true)
     } catch (err) {
       const errorMsg: ChatMessage = {
         id: nextId(),

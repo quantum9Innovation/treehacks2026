@@ -53,7 +53,7 @@ def _solve_and_save(
     device: str | None = None,
 ) -> dict:
     """Solve affine transform, save calibration, return result dict (no WS publish)."""
-    from agent_v2.calibration import (
+    from agent.calibration import (
         calibration_path_for_device,
         save_calibration,
         solve_affine_transform,
@@ -202,7 +202,7 @@ class WebCalibrationSession:
     mode = "manual"
 
     def __init__(self, hw: HardwareManager, bus: EventBus):
-        from agent_v2.calibration import CALIBRATION_POSITIONS
+        from agent.calibration import CALIBRATION_POSITIONS
 
         self.hw = hw
         self.bus = bus
@@ -350,7 +350,7 @@ class ArucoCalibrationSession:
         bus: EventBus,
         marker_id: int | None = None,
     ):
-        from agent_v2.calibration import CALIBRATION_POSITIONS
+        from agent.calibration import CALIBRATION_POSITIONS
 
         self.hw = hw
         self.bus = bus
@@ -492,7 +492,9 @@ class ArucoCalibrationSession:
                         continue
 
                     # Detect markers on a copy (annotator draws on live feed separately)
-                    corners, ids, _ = self._detector.detectMarkers(bundle.raw_color_image)
+                    corners, ids, _ = self._detector.detectMarkers(
+                        bundle.raw_color_image
+                    )
                     result = _find_target_marker(corners, ids, self.marker_id)
 
                     if result is not None:
@@ -635,7 +637,7 @@ class MultiArmArucoCalibrationSession:
     MAX_ATTEMPTS = 150
 
     def __init__(self, hw: HardwareManager, bus: EventBus):
-        from agent_v2.calibration import CALIBRATION_POSITIONS
+        from agent.calibration import CALIBRATION_POSITIONS
 
         self.hw = hw
         self.bus = bus
@@ -1036,7 +1038,9 @@ async def start_calibration(body: StartCalibrationRequest, request: Request):
     bus: EventBus = request.app.state.event_bus
     global _session
 
-    logger.info(f"Calibration start requested: mode={body.mode}, marker_id={body.marker_id}")
+    logger.info(
+        f"Calibration start requested: mode={body.mode}, marker_id={body.marker_id}"
+    )
     logger.info(
         f"Hardware state: ct={'yes' if hw.ct else 'no'}, "
         f"motion={'yes' if hw.motion else 'no'}, "

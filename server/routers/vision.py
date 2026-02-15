@@ -112,7 +112,9 @@ async def segment(body: SegmentRequest, request: Request):
         )
         if depth_mm_raw is not None and depth_mm_raw > 0:
             depth_mm = round(float(depth_mm_raw), 1)
-            cam_3d = hw.ct.deproject_pixel(body.pixel_x, body.pixel_y, depth_mm=depth_mm_raw)
+            cam_3d = hw.ct.deproject_pixel(
+                body.pixel_x, body.pixel_y, depth_mm=depth_mm_raw
+            )
             if cam_3d is not None:
                 arm_3d = hw.ct.camera_to_arm(cam_3d)
                 if arm_3d is not None:
@@ -173,12 +175,17 @@ async def detect(body: DetectRequest, request: Request):
     segments = await hw.run_in_vision_thread(_detect)
 
     if not segments:
-        return {"status": "error", "message": f"No objects matching '{body.query}' detected"}
+        return {
+            "status": "error",
+            "message": f"No objects matching '{body.query}' detected",
+        }
 
     seg = segments[0]
     bbox_px = seg.get("box_2d_px", (0, 0, 0, 0))
     label = seg.get("label", body.query)
-    centroid = seg.get("centroid", ((bbox_px[0] + bbox_px[2]) // 2, (bbox_px[1] + bbox_px[3]) // 2))
+    centroid = seg.get(
+        "centroid", ((bbox_px[0] + bbox_px[2]) // 2, (bbox_px[1] + bbox_px[3]) // 2)
+    )
     cx, cy = centroid
 
     # Compute arm coordinates
@@ -207,14 +214,21 @@ async def detect(body: DetectRequest, request: Request):
         overlay = annotated.copy()
         overlay[mask] = [0, 200, 0]
         cv2.addWeighted(overlay, 0.4, annotated, 0.6, 0, annotated)
-    cv2.rectangle(annotated, (bbox_px[0], bbox_px[1]), (bbox_px[2], bbox_px[3]), (0, 255, 0), 2)
+    cv2.rectangle(
+        annotated, (bbox_px[0], bbox_px[1]), (bbox_px[2], bbox_px[3]), (0, 255, 0), 2
+    )
     cv2.circle(annotated, (cx, cy), 6, (255, 0, 0), -1)
 
     return {
         "query": body.query,
         "label": label,
         "centroid": {"pixel_x": cx, "pixel_y": cy},
-        "bbox": {"x1": bbox_px[0], "y1": bbox_px[1], "x2": bbox_px[2], "y2": bbox_px[3]},
+        "bbox": {
+            "x1": bbox_px[0],
+            "y1": bbox_px[1],
+            "x2": bbox_px[2],
+            "y2": bbox_px[3],
+        },
         "mask_area_px": mask_area,
         "depth_mm": depth_mm,
         "arm_coordinates": arm_coords,

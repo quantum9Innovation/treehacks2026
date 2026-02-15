@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from ..agent_wrapper import WebAgentV3
+from agent.agent_wrapper import WebAgentV3
 from ..config import Settings
 from ..events import EventBus
 from ..hardware import HardwareManager
@@ -27,7 +27,7 @@ def _get_or_create_agent(request: Request) -> WebAgentV3:
 
         # Build LLM provider based on settings
         if settings.llm_provider == "gemini":
-            from agent_v3.llm import GeminiProvider
+            from agent.llm import GeminiProvider
 
             provider = GeminiProvider(
                 google_api_key=settings.google_api_key,
@@ -35,7 +35,7 @@ def _get_or_create_agent(request: Request) -> WebAgentV3:
                 thinking_budget=settings.gemini_thinking_budget,
             )
         else:  # "openai" (default)
-            from agent_v3.llm import OpenAIProvider
+            from agent.llm import OpenAIProvider
 
             provider = OpenAIProvider(
                 openai_api_key=settings.openai_api_key,

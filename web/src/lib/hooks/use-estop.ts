@@ -15,7 +15,10 @@ export function useEstop() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== ' ') return
-      // Always prevent default so Space never opens dropdowns / scrolls
+      // Don't intercept Space when typing in an input or textarea
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      // Prevent default so Space never opens dropdowns / scrolls
       e.preventDefault()
       e.stopPropagation()
       fireEstop()

@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     arm_devices: list[str] = ["/dev/ARM0", "/dev/ARM1", "/dev/ARM2", "/dev/ARM3"]
     sam2_model: str = "tiny"
     sam2_device: str = "auto"
-    calibration_path: str = "agent_v2/calibration_data.json"
+    calibration_path: str = "agent/calibration_data.json"
     llm_model: str = "gpt-5.2"
     reasoning_effort: str = "low"
     host: str = "0.0.0.0"

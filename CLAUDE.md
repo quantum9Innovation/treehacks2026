@@ -15,10 +15,9 @@ Vision-driven robot arm control system for the **RoArm M2** (4-DOF). Multiple LL
 ## Commands
 
 ```bash
-uv run vlm-agent-v2                # Run main agent (SAM2 + OpenAI)
-uv run vlm-agent-v2 --calibrate    # Run camera-to-arm calibration
-uv run vlm-agent-v3                # Run Gemini Robotics agent (experimental)
-uv run vlm-agent                   # Run legacy V1 agent
+uv run vlm-agent                   # Run agent (multi-provider: OpenAI or Gemini)
+uv run vlm-agent --calibrate       # Run camera-to-arm calibration
+uv run vlm-agent --provider gemini # Use Gemini ER provider
 uv add <package>                   # Add dependency
 ```
 
@@ -33,20 +32,28 @@ Ruff ignores: F403, F405, E731. Pyright ignores missing imports.
 
 ## Architecture
 
-### Agent Versions
+### Agent (`agent/`)
 
-- **`agent/`** (V1): Basic OpenAI + YOLO detection. Legacy.
-- **`agent_v2/`** (V2, current): OpenAI GPT + SAM2 point-prompt segmentation. The agent calls tools (`look`, `segment`, `goto_pixel`, `gripper_ctrl`) via structured function calling. The LLM decides what to do; tools execute against hardware.
-- **`agent_v3/`** (V3, experimental): Google Gemini Robotics ER 1.5 with native spatial reasoning.
+Consolidated agent package. Multi-provider LLM orchestrator (OpenAI GPT or Gemini ER) with dual vision (SAM2 + Gemini ER). The agent calls tools (`detect`, `segment`, `goto_pixel`, `move_to_xyz`, `gripper_ctrl`, etc.) via structured function calling. Auto-injects camera frames each turn.
 
-### Vision Pipeline (V2)
+Key files:
+- **`agent.py`**: CLI orchestrator (`AgentV3` class) — hardware init, agent loop, interactive REPL
+- **`agent_wrapper.py`**: Web orchestrator (`WebAgentV3`) — wraps agent for web UI with EventBus
+- **`llm.py`**: LLM provider abstraction (`OpenAIProvider`, `GeminiProvider`), `create_openai_client`, `ConfirmationHandler`
+- **`tools.py`**: Tool declarations (provider-agnostic)
+- **`prompts.py`**: System/task prompt generation
+- **`camera.py`**: `RealSenseCamera` wrapper
+- **`gemini_vision.py`**: Gemini ER vision (detect, point, segment)
+- **`run.py`**: CLI entry point (`uv run vlm-agent`)
 
-`camera → SAM2/YOLO detection → depth enrichment (RealSense) → coordinate transform → arm coordinates`
+### Vision Pipeline
 
-- **Vision backends** (`agent_v2/vision/`): Abstract `VisionBackend` interface with SAM2 (default), YOLO, and mock implementations.
-- **Coordinate transform** (`agent_v2/coordinate_transform.py`): Pixel (x,y) + depth → camera 3D → arm 3D via calibration matrix.
-- **Calibration** (`agent_v2/calibration.py`): Interactive 8-point procedure using SVD to compute rigid transform. Saved to `calibration_data.json`. RMSE < 20mm is good.
-- **Data model** (`agent_v2/models.py`): `DetectedObject`, `SceneState`, `Point3D` flow through the pipeline.
+`camera → SAM2/Gemini ER detection → depth enrichment (RealSense) → coordinate transform → arm coordinates`
+
+- **Vision backends** (`agent/vision/`): Abstract `VisionBackend` interface with SAM2 (default), YOLO, and mock implementations.
+- **Coordinate transform** (`agent/coordinate_transform.py`): Pixel (x,y) + depth → camera 3D → arm 3D via calibration matrix.
+- **Calibration** (`agent/calibration.py`): Interactive 8-point procedure using least-squares affine solver. Saved to `calibration_data.json`. RMSE < 20mm is good.
+- **Data model** (`agent/models.py`): `DetectedObject`, `SceneState`, `Point3D` flow through the pipeline.
 
 ### Motion Controller (`motion_controller/`)
 

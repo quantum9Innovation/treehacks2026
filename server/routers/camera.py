@@ -21,8 +21,7 @@ _pcs: set[RTCPeerConnection] = set()
 async def _sweep_stale_pcs():
     """Close and remove peer connections in failed/disconnected/closed state."""
     stale = {
-        pc for pc in _pcs
-        if pc.connectionState in ("failed", "closed", "disconnected")
+        pc for pc in _pcs if pc.connectionState in ("failed", "closed", "disconnected")
     }
     for pc in stale:
         try:

@@ -123,13 +123,17 @@ async def connect_arm(body: ConnectRequest, request: Request):
     """Connect to a specific arm device (keeps other arms connected)."""
     hw, bus = _get_hw_bus(request)
     if body.device not in hw.arm_devices:
-        raise HTTPException(400, f"Unknown device: {body.device}. Available: {hw.arm_devices}")
+        raise HTTPException(
+            400, f"Unknown device: {body.device}. Available: {hw.arm_devices}"
+        )
     try:
         await hw.connect_arm(body.device)
     except Exception as e:
         raise HTTPException(500, f"Failed to connect to {body.device}: {e}")
     await bus.publish("arm.connected", {"device": body.device})
-    return ConnectResponse(status="success", device=body.device, message=f"Connected to {body.device}")
+    return ConnectResponse(
+        status="success", device=body.device, message=f"Connected to {body.device}"
+    )
 
 
 @router.post("/connect-and-probe-all", response_model=ConnectAndProbeAllResponse)
@@ -165,8 +169,12 @@ async def connect_and_probe_all(request: Request):
                 await asyncio.sleep(1)
                 x, y, z = await hw.run_in_hw_thread(motion.get_pose)
                 pose = PoseResponse(x=round(x, 1), y=round(y, 1), z=round(z, 1))
-                await bus.publish("arm.position", {"device": device, **pose.model_dump()})
-                await bus.publish("arm.ground_calibrated", {"status": True, "device": device})
+                await bus.publish(
+                    "arm.position", {"device": device, **pose.model_dump()}
+                )
+                await bus.publish(
+                    "arm.ground_calibrated", {"status": True, "device": device}
+                )
             probed.append(device)
         except Exception as e:
             logger.warning(f"Failed to probe ground on {device}: {e}")
@@ -194,7 +202,9 @@ async def disconnect_arm(request: Request, device: str | None = Query(None)):
         raise HTTPException(400, f"Arm {dev} is not connected")
     await hw.disconnect_arm(dev)
     await bus.publish("arm.disconnected", {"device": dev})
-    return ConnectResponse(status="success", device=dev, message=f"Disconnected from {dev}")
+    return ConnectResponse(
+        status="success", device=dev, message=f"Disconnected from {dev}"
+    )
 
 
 @router.get("/status", response_model=ArmStatusResponse)
@@ -226,7 +236,9 @@ async def probe_ground(request: Request, device: str | None = Query(None)):
         await bus.publish("arm.position", {"device": dev, **pose.model_dump()})
         await bus.publish("arm.ground_calibrated", {"status": True, "device": dev})
 
-    return ProbeGroundResponse(status="success", message="Ground probed and Z=0 calibrated")
+    return ProbeGroundResponse(
+        status="success", message="Ground probed and Z=0 calibrated"
+    )
 
 
 @router.get("/pose", response_model=PoseResponse)
@@ -241,7 +253,9 @@ async def get_pose(request: Request, device: str | None = Query(None)):
 
 
 @router.post("/move", response_model=MoveResponse)
-async def move_to(body: MoveRequest, request: Request, device: str | None = Query(None)):
+async def move_to(
+    body: MoveRequest, request: Request, device: str | None = Query(None)
+):
     hw, bus = _get_hw_bus(request)
     dev, motion = _resolve_arm(hw, device)
 
@@ -249,7 +263,13 @@ async def move_to(body: MoveRequest, request: Request, device: str | None = Quer
     async with lock:
         await bus.publish(
             "arm.moving",
-            {"device": dev, "target_x": body.x, "target_y": body.y, "target_z": body.z, "status": "started"},
+            {
+                "device": dev,
+                "target_x": body.x,
+                "target_y": body.y,
+                "target_z": body.z,
+                "status": "started",
+            },
         )
 
         ok = await hw.run_in_hw_thread(motion.move_to, body.x, body.y, body.z)
@@ -289,7 +309,9 @@ async def move_home(request: Request, device: str | None = Query(None)):
         x, y, z = await hw.run_in_hw_thread(motion.get_pose)
         position = PoseResponse(x=round(x, 1), y=round(y, 1), z=round(z, 1))
         await bus.publish("arm.position", {"device": dev, **position.model_dump()})
-        return MoveResponse(status="success", message="Moved to home position", position=position)
+        return MoveResponse(
+            status="success", message="Moved to home position", position=position
+        )
 
 
 @router.post("/stop", response_model=MoveResponse)
@@ -346,7 +368,9 @@ def _estop_one(hw: HardwareManager, device: str) -> PoseResponse:
 
 
 @router.post("/gripper", response_model=GripperResponse)
-async def gripper_control(body: GripperRequest, request: Request, device: str | None = Query(None)):
+async def gripper_control(
+    body: GripperRequest, request: Request, device: str | None = Query(None)
+):
     hw, bus = _get_hw_bus(request)
     dev, motion = _resolve_arm(hw, device)
 
@@ -354,9 +378,7 @@ async def gripper_control(body: GripperRequest, request: Request, device: str | 
 
     lock = hw.get_arm_lock(dev)
     async with lock:
-        await hw.run_in_hw_thread(
-            motion.arm.gripper_angle_ctrl, angle, 100, 50
-        )
+        await hw.run_in_hw_thread(motion.arm.gripper_angle_ctrl, angle, 100, 50)
         await asyncio.sleep(0.5)
 
     state = "open" if angle > 60 else ("closed" if angle < 10 else "partial")
@@ -365,7 +387,9 @@ async def gripper_control(body: GripperRequest, request: Request, device: str | 
 
 
 @router.post("/goto-pixel", response_model=MoveResponse)
-async def goto_pixel(body: GotoPixelRequest, request: Request, device: str | None = Query(None)):
+async def goto_pixel(
+    body: GotoPixelRequest, request: Request, device: str | None = Query(None)
+):
     """Move arm to 3D position from pixel coordinates."""
     hw, bus = _get_hw_bus(request)
     dev, motion = _resolve_arm(hw, device)
@@ -383,7 +407,9 @@ async def goto_pixel(body: GotoPixelRequest, request: Request, device: str | Non
     # Compute arm coordinates
     depth_mm = hw.ct.get_depth_at_pixel(depth_frame, body.pixel_x, body.pixel_y)
     if depth_mm is None or depth_mm <= 0:
-        raise HTTPException(400, f"No valid depth at pixel ({body.pixel_x}, {body.pixel_y})")
+        raise HTTPException(
+            400, f"No valid depth at pixel ({body.pixel_x}, {body.pixel_y})"
+        )
 
     cam_3d = hw.ct.deproject_pixel(body.pixel_x, body.pixel_y, depth_mm=depth_mm)
     if cam_3d is None:
@@ -401,7 +427,13 @@ async def goto_pixel(body: GotoPixelRequest, request: Request, device: str | Non
     async with lock:
         await bus.publish(
             "arm.moving",
-            {"device": dev, "target_x": target_x, "target_y": target_y, "target_z": target_z, "status": "started"},
+            {
+                "device": dev,
+                "target_x": target_x,
+                "target_y": target_y,
+                "target_z": target_z,
+                "status": "started",
+            },
         )
         ok = await hw.run_in_hw_thread(motion.move_to, target_x, target_y, target_z)
 
@@ -411,6 +443,8 @@ async def goto_pixel(body: GotoPixelRequest, request: Request, device: str | Non
 
         return MoveResponse(
             status="success" if ok else "error",
-            message=f"Moved to arm ({target_x:.0f}, {target_y:.0f}, {target_z:.0f})" if ok else "Move failed",
+            message=f"Moved to arm ({target_x:.0f}, {target_y:.0f}, {target_z:.0f})"
+            if ok
+            else "Move failed",
             position=position,
         )

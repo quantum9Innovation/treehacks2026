@@ -43,7 +43,7 @@ class HardwareManager:
         arm_devices: list[str] | None = None,
         sam2_model: str = "tiny",
         sam2_device: str = "auto",
-        calibration_path: str = "agent_v2/calibration_data.json",
+        calibration_path: str = "agent/calibration_data.json",
         mock: bool = False,
         enable_sam2: bool = True,
         enable_gemini_vision: bool = True,
@@ -136,14 +136,14 @@ class HardwareManager:
         from pathlib import Path
 
         from agent.camera import RealSenseCamera
-        from agent_v2.coordinate_transform import CoordinateTransform
+        from agent.coordinate_transform import CoordinateTransform
 
         logger.info("Initializing camera...")
         self.camera = RealSenseCamera()
         self.camera.start()
 
         if self._enable_sam2:
-            from agent_v2.vision.sam2_backend import SAM2Backend
+            from agent.vision.sam2_backend import SAM2Backend
 
             logger.info(f"Loading SAM2 ({self._sam2_model})...")
             self.sam2 = SAM2Backend(
@@ -154,7 +154,7 @@ class HardwareManager:
 
         if self._enable_gemini_vision and self._google_api_key:
             from google import genai
-            from agent_v3.gemini_vision import GeminiVision
+            from agent.gemini_vision import GeminiVision
 
             logger.info("Initializing Gemini ER vision...")
             vision_client = genai.Client(api_key=self._google_api_key)
@@ -174,7 +174,7 @@ class HardwareManager:
         if self.active_arm_device is None:
             return None
         from pathlib import Path
-        from agent_v2.calibration import calibration_path_for_device
+        from agent.calibration import calibration_path_for_device
 
         return str(
             calibration_path_for_device(
@@ -268,7 +268,9 @@ class HardwareManager:
             color_image = np.asanyarray(color_frame.get_data())
 
             # Save clean copy before annotation for marker detection
-            raw_color = color_image.copy() if self.frame_annotator is not None else color_image
+            raw_color = (
+                color_image.copy() if self.frame_annotator is not None else color_image
+            )
 
             # Apply frame annotator (e.g. ArUco marker overlay) in-place
             if self.frame_annotator is not None:
