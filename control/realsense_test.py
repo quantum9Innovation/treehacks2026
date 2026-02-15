@@ -27,10 +27,11 @@ def generate_color_frames():
             continue
 
         color_image = np.asanyarray(color_frame.get_data())
-        _, jpeg = cv2.imencode('.jpg', color_image)
+        _, jpeg = cv2.imencode(".jpg", color_image)
 
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+        yield (
+            b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+        )
 
 
 def generate_depth_frames():
@@ -44,34 +45,37 @@ def generate_depth_frames():
         # Apply colormap to depth frame
         colorized_depth = colorizer.colorize(depth_frame)
         depth_image = np.asanyarray(colorized_depth.get_data())
-        _, jpeg = cv2.imencode('.jpg', depth_image)
+        _, jpeg = cv2.imencode(".jpg", depth_image)
 
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+        yield (
+            b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+        )
 
 
-@app.route('/')
+@app.route("/")
 def index():
     """Serve the main HTML page."""
-    return render_template('index.html')
+    return render_template("index.html")
 
 
-@app.route('/video_feed/color')
+@app.route("/video_feed/color")
 def video_feed_color():
     """MJPEG stream for color frames."""
-    return Response(generate_color_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(
+        generate_color_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
 
 
-@app.route('/video_feed/depth')
+@app.route("/video_feed/depth")
 def video_feed_depth():
     """MJPEG stream for depth frames."""
-    return Response(generate_depth_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(
+        generate_depth_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
-        app.run(host='0.0.0.0', port=5000, threaded=True)
+        app.run(host="0.0.0.0", port=5000, threaded=True)
     finally:
         pipeline.stop()

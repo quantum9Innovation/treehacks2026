@@ -100,6 +100,7 @@ def main() -> int:
     except Exception as e:
         if args.debug:
             import traceback
+
             traceback.print_exc()
         else:
             print(f"Error: {e}")

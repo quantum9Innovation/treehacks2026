@@ -32,14 +32,16 @@ def convert_tools_to_openai_format() -> list[dict]:
     """Convert tool declarations to OpenAI function calling format."""
     tools = []
     for decl in TOOL_DECLARATIONS:
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": decl["name"],
-                "description": decl["description"],
-                "parameters": decl["parameters"],
-            },
-        })
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": decl["name"],
+                    "description": decl["description"],
+                    "parameters": decl["parameters"],
+                },
+            }
+        )
     return tools
 
 
@@ -97,7 +99,9 @@ class AgentV2:
         logger.info(f"Initializing AgentV2 with model={model}, vision=sam2")
 
         # OpenAI client via Helicone
-        self.client = create_openai_client(openai_api_key, helicone_api_key, debug=debug)
+        self.client = create_openai_client(
+            openai_api_key, helicone_api_key, debug=debug
+        )
         self.model = model
 
         # Hardware
@@ -246,10 +250,12 @@ class AgentV2:
         pixel_y = args["pixel_y"]
 
         if self._last_color_image is None or self._last_depth_frame is None:
-            return json.dumps({
-                "status": "error",
-                "message": "No image available. Call look() first.",
-            }), []
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": "No image available. Call look() first.",
+                }
+            ), []
 
         # Run SAM2 segmentation
         print(f"Running SAM2 segmentation at ({pixel_x}, {pixel_y})...")
@@ -448,10 +454,16 @@ class AgentV2:
             "message": f"Gripper {state} at {angle} degrees",
         }
 
-    def _execute_tool(self, tool_call) -> tuple[dict[str, Any] | str, list[dict] | None]:
+    def _execute_tool(
+        self, tool_call
+    ) -> tuple[dict[str, Any] | str, list[dict] | None]:
         """Execute a tool call. Returns (result, optional_image_content)."""
         tool_name = tool_call.function.name
-        args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+        args = (
+            json.loads(tool_call.function.arguments)
+            if tool_call.function.arguments
+            else {}
+        )
 
         # look and segment return images, no confirmation needed
         if tool_name == "look":
@@ -473,7 +485,9 @@ class AgentV2:
                 z_off = args.get("z_offset_mm", 50)
                 arm_desc = ""
                 if self._last_depth_frame is not None:
-                    depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, px, py)
+                    depth_mm = self.ct.get_depth_at_pixel(
+                        self._last_depth_frame, px, py
+                    )
                     if depth_mm is not None:
                         cam_3d = self.ct.deproject_pixel(px, py, depth_mm=depth_mm)
                         if cam_3d is not None:
@@ -586,16 +600,20 @@ class AgentV2:
 
             for tool_call in assistant_message.tool_calls:
                 result, images = self._execute_tool(tool_call)
-                print(f"Result: {result if isinstance(result, str) else json.dumps(result, indent=2)[:200]}")
+                print(
+                    f"Result: {result if isinstance(result, str) else json.dumps(result, indent=2)[:200]}"
+                )
 
                 # For look/segment, result is a string; for others, it's a dict
                 result_str = result if isinstance(result, str) else json.dumps(result)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": result_str,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": result_str,
+                    }
+                )
 
                 if images:
                     pending_images = images
@@ -608,10 +626,12 @@ class AgentV2:
 
             # Add images from look/segment as a user message
             if pending_images:
-                messages.append({
-                    "role": "user",
-                    "content": pending_images,
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": pending_images,
+                    }
+                )
 
             # After movement, capture a fresh view for verification
             if movement_executed:
@@ -619,19 +639,21 @@ class AgentV2:
                 time.sleep(0.5)
                 text_result, image_content = self._execute_look({})
 
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        *image_content,
-                        {
-                            "type": "text",
-                            "text": (
-                                "[Updated view after movement. "
-                                "Confirm task completion or continue if more actions needed.]"
-                            ),
-                        },
-                    ],
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            *image_content,
+                            {
+                                "type": "text",
+                                "text": (
+                                    "[Updated view after movement. "
+                                    "Confirm task completion or continue if more actions needed.]"
+                                ),
+                            },
+                        ],
+                    }
+                )
 
         return "Maximum iterations reached. Task may be incomplete."
 
@@ -672,7 +694,9 @@ class AgentV2:
 
                 if task.lower() == "pos":
                     x, y, z = self.motion.get_pose()
-                    print(f"Current position: x={x:.1f}, y={y:.1f}, z={z:.1f} (ground-relative)")
+                    print(
+                        f"Current position: x={x:.1f}, y={y:.1f}, z={z:.1f} (ground-relative)"
+                    )
                     continue
 
                 if task.lower() == "calibrate":
@@ -689,13 +713,14 @@ class AgentV2:
 
                 print("\nProcessing task...")
                 try:
-                    response = self.process_task(task)
+                    self.process_task(task)
                     print(f"\n{'=' * 60}")
                     print("Task completed.")
                     print(f"{'=' * 60}\n")
                 except Exception as e:
                     if self.debug:
                         import traceback
+
                         traceback.print_exc()
                     print(f"\nError processing task: {e}\n")
 
@@ -738,8 +763,13 @@ class AgentV2:
 
         display = color_image.copy()
         cv2.putText(
-            display, "Click to segment | R=refresh | Q=quit",
-            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
+            display,
+            "Click to segment | R=refresh | Q=quit",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2,
         )
 
         try:
@@ -752,13 +782,20 @@ class AgentV2:
 
                 if key == ord("r"):
                     print("Refreshing frame...")
-                    color_image, depth_image, depth_frame = self._capture_aligned_frames()
+                    color_image, depth_image, depth_frame = (
+                        self._capture_aligned_frames()
+                    )
                     encode_time = self.sam2.set_image(color_image)
                     print(f"SAM2 image encoded in {encode_time:.1f}s")
                     display = color_image.copy()
                     cv2.putText(
-                        display, "Click to segment | R=refresh | Q=quit",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
+                        display,
+                        "Click to segment | R=refresh | Q=quit",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0),
+                        2,
                     )
                     clicked_pixel[0] = None
                     continue
@@ -798,11 +835,20 @@ class AgentV2:
                 cv2.putText(
                     display,
                     f"Score={score:.3f} Centroid=({cx},{cy}) {arm_str}",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
                 cv2.putText(
-                    display, "Click to segment | R=refresh | Q=quit",
-                    (10, display.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                    display,
+                    "Click to segment | R=refresh | Q=quit",
+                    (10, display.shape[0] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
 
         finally:
@@ -908,12 +954,22 @@ class AgentV2:
 
                 # Labels
                 cv2.putText(
-                    color_display, "COLOR", (10, color_display.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                    color_display,
+                    "COLOR",
+                    (10, color_display.shape[0] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
                 cv2.putText(
-                    depth_display, "DEPTH", (10, depth_display.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                    depth_display,
+                    "DEPTH",
+                    (10, depth_display.shape[0] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
 
                 combined = np.hstack([color_display, depth_display])
@@ -945,10 +1001,14 @@ class AgentV2:
                 # Transform to arm coordinates
                 arm_3d = self.ct.camera_to_arm(cam_3d)
                 if arm_3d is None:
-                    print(f"  Camera→arm transform failed — skipping.")
+                    print("  Camera→arm transform failed — skipping.")
                     continue
 
-                target_x, target_y, target_z = float(arm_3d[0]), float(arm_3d[1]), float(arm_3d[2])
+                target_x, target_y, target_z = (
+                    float(arm_3d[0]),
+                    float(arm_3d[1]),
+                    float(arm_3d[2]),
+                )
 
                 print(
                     f"\n  Click: pixel=({px},{py}) depth={depth_mm:.0f}mm\n"
@@ -959,10 +1019,10 @@ class AgentV2:
                 # Attempt to move
                 ok = self.motion.move_to(target_x, target_y, target_z)
                 if ok:
-                    print(f"    Moved to target. Holding for 2 seconds...")
+                    print("    Moved to target. Holding for 2 seconds...")
                     time.sleep(2.0)
                 else:
-                    print(f"    Move failed — position may be unreachable.")
+                    print("    Move failed — position may be unreachable.")
                     time.sleep(0.5)
 
                 # Return home

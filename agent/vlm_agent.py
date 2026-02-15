@@ -61,14 +61,16 @@ def convert_tools_to_openai_format() -> list[dict]:
     """Convert tool declarations to OpenAI function calling format."""
     tools = []
     for decl in TOOL_DECLARATIONS:
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": decl["name"],
-                "description": decl["description"],
-                "parameters": decl["parameters"],
-            },
-        })
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": decl["name"],
+                    "description": decl["description"],
+                    "parameters": decl["parameters"],
+                },
+            }
+        )
     return tools
 
 
@@ -162,7 +164,9 @@ class VLMRobotAgent:
         logger.info(f"Initializing VLMRobotAgent with model={model}")
 
         # Initialize OpenAI client via Helicone proxy
-        self.client = create_openai_client(openai_api_key, helicone_api_key, debug=debug)
+        self.client = create_openai_client(
+            openai_api_key, helicone_api_key, debug=debug
+        )
         self.model = model
 
         # Initialize hardware
@@ -188,7 +192,6 @@ class VLMRobotAgent:
         }
 
         # Note: We don't persist history across tasks to avoid orphaned tool messages
-        pass
 
     def clear_history(self) -> None:
         """Clear conversation history (no-op, history not persisted)."""
@@ -235,7 +238,11 @@ class VLMRobotAgent:
     def _execute_tool(self, tool_call) -> dict[str, Any]:
         """Execute a tool call with user confirmation."""
         tool_name = tool_call.function.name
-        args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+        args = (
+            json.loads(tool_call.function.arguments)
+            if tool_call.function.arguments
+            else {}
+        )
 
         # Request confirmation for movement commands
         if not self.confirmation.request_confirmation(tool_name, args):
@@ -270,7 +277,9 @@ class VLMRobotAgent:
                 else:
                     new_content.append(item)
             if had_images:
-                new_content.insert(0, {"type": "text", "text": "[Previous images removed]"})
+                new_content.insert(
+                    0, {"type": "text", "text": "[Previous images removed]"}
+                )
                 msg["content"] = new_content
 
     def _create_image_content(self) -> list[dict]:
@@ -357,7 +366,11 @@ class VLMRobotAgent:
                 }
 
                 # Add reasoning effort for models that support it
-                if "codex" in self.model.lower() or "o1" in self.model.lower() or "o3" in self.model.lower():
+                if (
+                    "codex" in self.model.lower()
+                    or "o1" in self.model.lower()
+                    or "o3" in self.model.lower()
+                ):
                     request_kwargs["extra_body"] = {
                         "reasoning_effort": self.reasoning_effort,
                     }
@@ -408,11 +421,13 @@ class VLMRobotAgent:
                 print(f"Result: {result}")
 
                 # Add tool result to messages
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(result),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(result),
+                    }
+                )
 
                 tool_name = tool_call.function.name
                 if tool_name in ["pose_ctrl", "move_home", "gripper_ctrl"]:
@@ -428,12 +443,18 @@ class VLMRobotAgent:
                 # self._strip_old_images(messages)
 
                 new_image_content = self._create_image_content()
-                messages.append({
-                    "role": "user",
-                    "content": new_image_content + [
-                        {"type": "text", "text": "[Updated camera view after movement. Confirm task completion or continue if more actions needed.]"}
-                    ],
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": new_image_content
+                        + [
+                            {
+                                "type": "text",
+                                "text": "[Updated camera view after movement. Confirm task completion or continue if more actions needed.]",
+                            }
+                        ],
+                    }
+                )
                 time.sleep(0.3)
 
         return "Maximum iterations reached. Task may be incomplete."
@@ -485,13 +506,14 @@ class VLMRobotAgent:
 
                 print("\nProcessing task...")
                 try:
-                    response = self.process_task(task)
+                    self.process_task(task)
                     print(f"\n{'=' * 60}")
                     print("Task completed.")
                     print(f"{'=' * 60}\n")
                 except Exception as e:
                     if self.debug:
                         import traceback
+
                         traceback.print_exc()
                     print(f"\nError processing task: {e}\n")
 

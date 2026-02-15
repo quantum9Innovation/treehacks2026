@@ -117,7 +117,11 @@ class CoordinateTransform:
         return depth_m * 1000.0  # convert to mm
 
     def deproject_pixel(
-        self, u: int, v: int, depth_frame: rs.depth_frame | None = None, depth_mm: float | None = None
+        self,
+        u: int,
+        v: int,
+        depth_frame: rs.depth_frame | None = None,
+        depth_mm: float | None = None,
     ) -> np.ndarray | None:
         """Deproject a pixel + depth to camera-frame 3D point.
 
@@ -141,19 +145,25 @@ class CoordinateTransform:
             if depth_frame is None:
                 logger.error(
                     "Cannot deproject pixel (%d, %d): no depth_frame provided and "
-                    "no depth_mm given. Pass a depth_frame from aligned capture.", u, v
+                    "no depth_mm given. Pass a depth_frame from aligned capture.",
+                    u,
+                    v,
                 )
                 return None
             depth_mm = self.get_depth_at_pixel(depth_frame, u, v)
             if depth_mm is None:
                 logger.warning(
                     "Cannot deproject pixel (%d, %d): all depth values in 5x5 patch "
-                    "are zero (object too close, too far, or in a shadow).", u, v
+                    "are zero (object too close, too far, or in a shadow).",
+                    u,
+                    v,
                 )
                 return None
 
         depth_m = depth_mm / 1000.0
-        point = rs.rs2_deproject_pixel_to_point(self._intrinsics, [float(u), float(v)], depth_m)
+        point = rs.rs2_deproject_pixel_to_point(
+            self._intrinsics, [float(u), float(v)], depth_m
+        )
         # Convert to mm
         return np.array([point[0] * 1000, point[1] * 1000, point[2] * 1000])
 
@@ -240,7 +250,9 @@ class CoordinateTransform:
             # Get depth
             depth_mm = self.get_depth_at_pixel(depth_frame, u, v)
             if depth_mm is None:
-                logger.debug(f"No depth for object {obj.object_id} ({obj.label}) at ({u},{v})")
+                logger.debug(
+                    f"No depth for object {obj.object_id} ({obj.label}) at ({u},{v})"
+                )
                 continue
             obj.depth_mm = depth_mm
 

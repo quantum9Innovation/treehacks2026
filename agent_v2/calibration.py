@@ -94,7 +94,9 @@ def solve_affine_transform(
             break
         removed = len(cam) - keep.sum()
         if removed > 0:
-            print(f"  Outlier rejection round {round_i + 1}: removed {removed} point(s) (threshold={threshold:.1f}mm)")
+            print(
+                f"  Outlier rejection round {round_i + 1}: removed {removed} point(s) (threshold={threshold:.1f}mm)"
+            )
             cam = cam[keep]
             arm = arm[keep]
         else:
@@ -211,7 +213,9 @@ class CalibrationProcedure:
 
         return color_image, depth_image, depth_frame
 
-    def run(self, save_path: Path = DEFAULT_CALIBRATION_PATH) -> tuple[np.ndarray, float]:
+    def run(
+        self, save_path: Path = DEFAULT_CALIBRATION_PATH
+    ) -> tuple[np.ndarray, float]:
         """Run the interactive calibration procedure.
 
         Returns:
@@ -282,12 +286,20 @@ class CalibrationProcedure:
                         cx, cy = self._clicked_pixel
                         # Draw crosshair on color
                         cv2.circle(color_display, (cx, cy), 8, (0, 0, 255), 2)
-                        cv2.line(color_display, (cx - 12, cy), (cx + 12, cy), (0, 0, 255), 1)
-                        cv2.line(color_display, (cx, cy - 12), (cx, cy + 12), (0, 0, 255), 1)
+                        cv2.line(
+                            color_display, (cx - 12, cy), (cx + 12, cy), (0, 0, 255), 1
+                        )
+                        cv2.line(
+                            color_display, (cx, cy - 12), (cx, cy + 12), (0, 0, 255), 1
+                        )
                         # Mirror crosshair on depth for visual reference
                         cv2.circle(depth_display, (cx, cy), 8, (0, 0, 255), 2)
-                        cv2.line(depth_display, (cx - 12, cy), (cx + 12, cy), (0, 0, 255), 1)
-                        cv2.line(depth_display, (cx, cy - 12), (cx, cy + 12), (0, 0, 255), 1)
+                        cv2.line(
+                            depth_display, (cx - 12, cy), (cx + 12, cy), (0, 0, 255), 1
+                        )
+                        cv2.line(
+                            depth_display, (cx, cy - 12), (cx, cy + 12), (0, 0, 255), 1
+                        )
 
                         cv2.putText(
                             color_display,
@@ -301,12 +313,22 @@ class CalibrationProcedure:
 
                     # Label each half
                     cv2.putText(
-                        color_display, "COLOR", (10, color_display.shape[0] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                        color_display,
+                        "COLOR",
+                        (10, color_display.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        1,
                     )
                     cv2.putText(
-                        depth_display, "DEPTH", (10, depth_display.shape[0] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                        depth_display,
+                        "DEPTH",
+                        (10, depth_display.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        1,
                     )
 
                     # Show side by side
@@ -318,7 +340,9 @@ class CalibrationProcedure:
                         print("Calibration aborted by user.")
                         cv2.destroyAllWindows()
                         if len(cam_points) >= 4:
-                            print(f"Solving with {len(cam_points)} points collected so far...")
+                            print(
+                                f"Solving with {len(cam_points)} points collected so far..."
+                            )
                             break
                         raise RuntimeError("Need at least 4 points for calibration")
 
@@ -333,12 +357,16 @@ class CalibrationProcedure:
                     if key == 13 and self._clicked_pixel:  # Enter
                         px, py = self._clicked_pixel
                         if current_depth_frame is None:
-                            print("  ERROR: No depth frame captured yet. Wait for next frame.")
+                            print(
+                                "  ERROR: No depth frame captured yet. Wait for next frame."
+                            )
                             self._clicked_pixel = None
                             continue
 
                         # Deproject using averaged patch (15x15, IQR-filtered)
-                        cam_3d = self.ct.deproject_patch(px, py, current_depth_frame, patch_size=15)
+                        cam_3d = self.ct.deproject_patch(
+                            px, py, current_depth_frame, patch_size=15
+                        )
                         if cam_3d is None:
                             print(
                                 f"  ERROR: Not enough valid depth around pixel ({px}, {py}). "
@@ -392,11 +420,15 @@ class CalibrationProcedure:
         else:
             print("  Quality: Poor - consider recalibrating")
 
-        print(f"\n  Per-point errors (all collected points):")
+        print("\n  Per-point errors (all collected points):")
         for idx, (err, cam_pt, arm_pt, est_pt) in enumerate(
             zip(per_point_errors, cam_arr, arm_arr, transformed)
         ):
-            flag = " *** OUTLIER (excluded from solve)" if err > 2 * rmse and err > 15 else ""
+            flag = (
+                " *** OUTLIER (excluded from solve)"
+                if err > 2 * rmse and err > 15
+                else ""
+            )
             print(
                 f"    Point {idx + 1}: error={err:.1f}mm  "
                 f"arm=[{arm_pt[0]:.0f},{arm_pt[1]:.0f},{arm_pt[2]:.0f}] "
@@ -406,7 +438,7 @@ class CalibrationProcedure:
         # Show affine matrix for sanity check
         A_part = M[:, :3]
         b_part = M[:, 3]
-        print(f"\n  Affine matrix (3x3 part):")
+        print("\n  Affine matrix (3x3 part):")
         axis_labels = ["X", "Y", "Z"]
         for i in range(3):
             components = []
@@ -442,11 +474,13 @@ def _print_calibration_results(cam_arr, arm_arr, M, rmse):
     else:
         print("  Quality: Poor - consider recalibrating")
 
-    print(f"\n  Per-point errors (all collected points):")
+    print("\n  Per-point errors (all collected points):")
     for idx, (err, cam_pt, arm_pt, est_pt) in enumerate(
         zip(per_point_errors, cam_arr, arm_arr, transformed)
     ):
-        flag = " *** OUTLIER (excluded from solve)" if err > 2 * rmse and err > 15 else ""
+        flag = (
+            " *** OUTLIER (excluded from solve)" if err > 2 * rmse and err > 15 else ""
+        )
         print(
             f"    Point {idx + 1}: error={err:.1f}mm  "
             f"arm=[{arm_pt[0]:.0f},{arm_pt[1]:.0f},{arm_pt[2]:.0f}] "
@@ -455,7 +489,7 @@ def _print_calibration_results(cam_arr, arm_arr, M, rmse):
 
     A_part = M[:, :3]
     b_part = M[:, 3]
-    print(f"\n  Affine matrix (3x3 part):")
+    print("\n  Affine matrix (3x3 part):")
     axis_labels = ["X", "Y", "Z"]
     for i in range(3):
         components = []
@@ -509,8 +543,12 @@ class ArucoCalibrationProcedure:
         self.aruco_params.adaptiveThreshWinSizeMin = 3
         self.aruco_params.adaptiveThreshWinSizeMax = 23
         self.aruco_params.adaptiveThreshWinSizeStep = 4
-        self.aruco_params.minMarkerPerimeterRate = 0.02  # slightly smaller than default 0.03
-        self.aruco_params.errorCorrectionRate = 0.8  # slightly more tolerant than default 0.6
+        self.aruco_params.minMarkerPerimeterRate = (
+            0.02  # slightly smaller than default 0.03
+        )
+        self.aruco_params.errorCorrectionRate = (
+            0.8  # slightly more tolerant than default 0.6
+        )
         self.aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
 
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
@@ -531,9 +569,7 @@ class ArucoCalibrationProcedure:
 
         return color_image, depth_image, depth_frame
 
-    def _detect_marker(
-        self, corners, ids
-    ) -> tuple[int, np.ndarray] | None:
+    def _detect_marker(self, corners, ids) -> tuple[int, np.ndarray] | None:
         """Pick the target marker from already-detected results.
 
         Args:
@@ -559,7 +595,9 @@ class ArucoCalibrationProcedure:
         center = corners[0][0].mean(axis=0)
         return int(ids[0][0]), center
 
-    def run(self, save_path: Path = DEFAULT_CALIBRATION_PATH) -> tuple[np.ndarray, float]:
+    def run(
+        self, save_path: Path = DEFAULT_CALIBRATION_PATH
+    ) -> tuple[np.ndarray, float]:
         """Run the automatic ArUco calibration procedure.
 
         Returns:
@@ -568,7 +606,11 @@ class ArucoCalibrationProcedure:
         cam_points = []
         arm_points = []
 
-        marker_filter = f" (marker ID={self.marker_id})" if self.marker_id is not None else " (any marker)"
+        marker_filter = (
+            f" (marker ID={self.marker_id})"
+            if self.marker_id is not None
+            else " (any marker)"
+        )
         window_name = "ArUco Calibration" + marker_filter
         cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
 
@@ -623,8 +665,10 @@ class ArucoCalibrationProcedure:
                             for j in range(4):
                                 cv2.line(
                                     color_display,
-                                    tuple(pts[j]), tuple(pts[(j + 1) % 4]),
-                                    (0, 0, 255), 1,
+                                    tuple(pts[j]),
+                                    tuple(pts[(j + 1) % 4]),
+                                    (0, 0, 255),
+                                    1,
                                 )
 
                     # Print diagnostics periodically (every ~1s)
@@ -669,27 +713,51 @@ class ArucoCalibrationProcedure:
                     # Detection stats overlay
                     diag_text = f"det={n_detected} rej={n_rejected}"
                     cv2.putText(
-                        color_display, status_text,
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2,
+                        color_display,
+                        status_text,
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        status_color,
+                        2,
                     )
                     cv2.putText(
                         color_display,
                         f"Arm: x={ax:.0f} y={ay:.0f} z={az:.0f}",
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1,
+                        (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        1,
                     )
                     progress = f"Frames: {len(collected_centers)}/{self.SETTLE_FRAMES}  |  {diag_text}"
                     cv2.putText(
-                        color_display, progress,
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1,
+                        color_display,
+                        progress,
+                        (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        1,
                     )
 
                     cv2.putText(
-                        color_display, "COLOR", (10, color_display.shape[0] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                        color_display,
+                        "COLOR",
+                        (10, color_display.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        1,
                     )
                     cv2.putText(
-                        depth_display, "DEPTH", (10, depth_display.shape[0] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                        depth_display,
+                        "DEPTH",
+                        (10, depth_display.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        1,
                     )
 
                     combined = np.hstack([color_display, depth_display])

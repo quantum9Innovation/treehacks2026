@@ -28,7 +28,9 @@ def main():
         for i in range(n_radii)
     ]
 
-    print(f"\n=== Heightmap Scan ({n_angles}x{n_radii} = {n_angles*n_radii} points) ===")
+    print(
+        f"\n=== Heightmap Scan ({n_angles}x{n_radii} = {n_angles * n_radii} points) ==="
+    )
     print(f"Base angles: {[f'{a:.1f}' for a in angles_deg]} deg")
     print(f"Radii: {[int(r) for r in radii]} mm\n")
 
@@ -43,14 +45,16 @@ def main():
             h = m.probe_height_at(x, y)
             heights[i][j] = h
 
-            label = f"[{i*n_radii+j+1}/{n_angles*n_radii}]"
+            label = f"[{i * n_radii + j + 1}/{n_angles * n_radii}]"
             if h is None:
                 print(f"  {label} angle={angle_deg:+.1f}° r={radius:.0f}mm -> SKIP")
             else:
-                print(f"  {label} angle={angle_deg:+.1f}° r={radius:.0f}mm -> z={h:.0f}mm")
+                print(
+                    f"  {label} angle={angle_deg:+.1f}° r={radius:.0f}mm -> z={h:.0f}mm"
+                )
 
     # Print results grid
-    print(f"\n=== Heightmap (mm above ground) ===\n")
+    print("\n=== Heightmap (mm above ground) ===\n")
     header = "         " + "  ".join(f"{int(r):>5}" for r in radii)
     print(header)
     print("         " + "  ".join("-----" for _ in radii))

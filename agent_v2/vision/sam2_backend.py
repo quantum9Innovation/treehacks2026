@@ -29,7 +29,9 @@ class SAM2Backend:
         }
         model_id = model_map.get(model_size)
         if model_id is None:
-            raise ValueError(f"Unknown SAM2 model size: {model_size!r}. Choose from {list(model_map)}")
+            raise ValueError(
+                f"Unknown SAM2 model size: {model_size!r}. Choose from {list(model_map)}"
+            )
 
         resolved_device = self._resolve_device(torch, device)
         self.device = resolved_device
@@ -58,13 +60,18 @@ class SAM2Backend:
         if req.lower() != "auto":
             return req
 
-        env_dev = (os.environ.get("SAM2_DEVICE") or os.environ.get("SAM_DEVICE") or "").strip()
+        env_dev = (
+            os.environ.get("SAM2_DEVICE") or os.environ.get("SAM_DEVICE") or ""
+        ).strip()
         if env_dev:
             return env_dev
 
         if getattr(torch, "cuda", None) is not None and torch.cuda.is_available():
             return "cuda"
-        if getattr(torch, "backends", None) is not None and getattr(torch.backends, "mps", None) is not None:
+        if (
+            getattr(torch, "backends", None) is not None
+            and getattr(torch.backends, "mps", None) is not None
+        ):
             if torch.backends.mps.is_available():
                 return "mps"
         return "cpu"

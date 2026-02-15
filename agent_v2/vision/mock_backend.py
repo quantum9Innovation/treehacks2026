@@ -29,9 +29,7 @@ class MockBackend(VisionBackend):
                 object_id=1,
                 label="bottle",
                 confidence=0.88,
-                bbox=BBox(
-                    x1=w // 2 + 50, y1=h // 4, x2=w // 2 + 120, y2=h // 4 + 150
-                ),
+                bbox=BBox(x1=w // 2 + 50, y1=h // 4, x2=w // 2 + 120, y2=h // 4 + 150),
                 center_px=(w // 2 + 85, h // 4 + 75),
             ),
             DetectedObject(

@@ -138,8 +138,10 @@ def main() -> int:
             return 1
 
     # Resolve calibration path
-    calibration_path = Path(args.calibration) if args.calibration else (
-        Path(__file__).parent / "calibration_data.json"
+    calibration_path = (
+        Path(args.calibration)
+        if args.calibration
+        else (Path(__file__).parent / "calibration_data.json")
     )
 
     try:
@@ -162,11 +164,15 @@ def main() -> int:
             try:
                 if args.calibrate_manual:
                     from .calibration import CalibrationProcedure
+
                     proc = CalibrationProcedure(camera, motion, ct)
                 else:
                     from .calibration import ArucoCalibrationProcedure
+
                     proc = ArucoCalibrationProcedure(
-                        camera, motion, ct,
+                        camera,
+                        motion,
+                        ct,
                         marker_id=args.aruco_marker_id,
                     )
                 proc.run(save_path=calibration_path)
@@ -224,7 +230,6 @@ def main() -> int:
             # Legacy YOLO mode — import the old agent path
             print("WARNING: YOLO mode uses the legacy agent code path.")
             print("Consider using --vision sam2 (default) for the new paradigm.")
-            from .vision.yolo_backend import YOLOBackend
             from .vision.sam2_backend import SAM2Backend
             from .agent import AgentV2
 
@@ -269,6 +274,7 @@ def main() -> int:
     except Exception as e:
         if args.debug:
             import traceback
+
             traceback.print_exc()
         else:
             print(f"Error: {e}")

@@ -7,9 +7,9 @@ from .models import DetectedObject
 
 # Distinct color palette (BGR)
 COLORS = [
-    (0, 255, 0),    # green
-    (255, 0, 0),    # blue
-    (0, 0, 255),    # red
+    (0, 255, 0),  # green
+    (255, 0, 0),  # blue
+    (0, 0, 255),  # red
     (0, 255, 255),  # yellow
     (255, 0, 255),  # magenta
     (255, 255, 0),  # cyan

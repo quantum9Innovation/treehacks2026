@@ -92,10 +92,10 @@ def create_task_prompt(
     if current_position:
         position_info = f"""
 ## Current Arm Position
-- X: {current_position['x']:.1f} mm (forward/back)
-- Y: {current_position['y']:.1f} mm (left/right)
-- Z: {current_position['z']:.1f} mm (height)
-- T: {current_position['t']:.1f} deg (gripper rotation)
+- X: {current_position["x"]:.1f} mm (forward/back)
+- Y: {current_position["y"]:.1f} mm (left/right)
+- Z: {current_position["z"]:.1f} mm (height)
+- T: {current_position["t"]:.1f} deg (gripper rotation)
 """
 
     return f"""## Current Task

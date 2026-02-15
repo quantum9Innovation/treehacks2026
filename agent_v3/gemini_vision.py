@@ -129,7 +129,9 @@ def parse_gemini_json(text: str) -> dict | list | None:
 class GeminiVision:
     """Wrapper around Gemini Robotics ER 1.5 for spatial vision tasks."""
 
-    def __init__(self, client: genai.Client, model: str = "gemini-robotics-er-1.5-preview"):
+    def __init__(
+        self, client: genai.Client, model: str = "gemini-robotics-er-1.5-preview"
+    ):
         self.client = client
         self.model = model
 
@@ -151,7 +153,9 @@ class GeminiVision:
         )
         return response.text
 
-    def detect_objects(self, image: np.ndarray, query: str = "all objects") -> list[dict]:
+    def detect_objects(
+        self, image: np.ndarray, query: str = "all objects"
+    ) -> list[dict]:
         """Detect objects in an image using natural language query.
 
         Args:

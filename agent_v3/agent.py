@@ -206,26 +206,32 @@ class AgentV3:
         query = args["query"]
 
         if self._last_color_image is None or self._last_depth_frame is None:
-            return json.dumps({
-                "status": "error",
-                "message": "No image available. Call look() first.",
-            }), []
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": "No image available. Call look() first.",
+                }
+            ), []
 
         # Run Gemini ER segmentation
         print(f"Detecting: {query!r}...")
         segments = self.vision.segment(self._last_color_image, query)
 
         if not segments:
-            return json.dumps({
-                "status": "error",
-                "message": f"No objects matching '{query}' detected.",
-            }), []
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": f"No objects matching '{query}' detected.",
+                }
+            ), []
 
         # Use the first (best) result
         seg = segments[0]
         bbox_px = seg.get("box_2d_px", (0, 0, 0, 0))
         label = seg.get("label", query)
-        centroid = seg.get("centroid", ((bbox_px[0] + bbox_px[2]) // 2, (bbox_px[1] + bbox_px[3]) // 2))
+        centroid = seg.get(
+            "centroid", ((bbox_px[0] + bbox_px[2]) // 2, (bbox_px[1] + bbox_px[3]) // 2)
+        )
         cx, cy = centroid
 
         # Compute 3D arm coordinates from centroid
@@ -251,7 +257,12 @@ class AgentV3:
             "query": query,
             "label": label,
             "centroid": {"pixel_x": cx, "pixel_y": cy},
-            "bbox": {"x1": bbox_px[0], "y1": bbox_px[1], "x2": bbox_px[2], "y2": bbox_px[3]},
+            "bbox": {
+                "x1": bbox_px[0],
+                "y1": bbox_px[1],
+                "x2": bbox_px[2],
+                "y2": bbox_px[3],
+            },
             "mask_area_px": mask_area,
             "depth_mm": round(depth_mm, 1) if depth_mm else None,
             "arm_coordinates": arm_coords,
@@ -304,8 +315,13 @@ class AgentV3:
 
         # Label
         cv2.putText(
-            annotated, label, (x1, max(y1 - 5, 15)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1,
+            annotated,
+            label,
+            (x1, max(y1 - 5, 15)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
         )
 
         # Centroid dot (blue)
@@ -431,7 +447,9 @@ class AgentV3:
                 z_off = args.get("z_offset_mm", 50)
                 arm_desc = ""
                 if self._last_depth_frame is not None:
-                    depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, px, py)
+                    depth_mm = self.ct.get_depth_at_pixel(
+                        self._last_depth_frame, px, py
+                    )
                     if depth_mm is not None:
                         cam_3d = self.ct.deproject_pixel(px, py, depth_mm=depth_mm)
                         if cam_3d is not None:
@@ -500,11 +518,13 @@ class AgentV3:
             ),
             types.Content(
                 role="model",
-                parts=[types.Part.from_text(
-                    text="Understood. I'm ready to control the robot arm using my vision "
-                    "and tool-calling capabilities. Give me a task and I'll start by "
-                    "looking at the scene."
-                )],
+                parts=[
+                    types.Part.from_text(
+                        text="Understood. I'm ready to control the robot arm using my vision "
+                        "and tool-calling capabilities. Give me a task and I'll start by "
+                        "looking at the scene."
+                    )
+                ],
             ),
             types.Content(
                 role="user",
@@ -595,15 +615,11 @@ class AgentV3:
                         movement_executed = True
 
             # Add function responses as a user turn
-            contents.append(
-                types.Content(role="user", parts=function_response_parts)
-            )
+            contents.append(types.Content(role="user", parts=function_response_parts))
 
             # Add images from look/detect as a separate user message
             if pending_image_parts:
-                contents.append(
-                    types.Content(role="user", parts=pending_image_parts)
-                )
+                contents.append(types.Content(role="user", parts=pending_image_parts))
 
             # After movement, capture a fresh view for verification
             if movement_executed:
@@ -662,7 +678,9 @@ class AgentV3:
 
                 if task.lower() == "pos":
                     x, y, z = self.motion.get_pose()
-                    print(f"Current position: x={x:.1f}, y={y:.1f}, z={z:.1f} (ground-relative)")
+                    print(
+                        f"Current position: x={x:.1f}, y={y:.1f}, z={z:.1f} (ground-relative)"
+                    )
                     continue
 
                 if task.lower() == "calibrate":
@@ -675,13 +693,14 @@ class AgentV3:
 
                 print("\nProcessing task...")
                 try:
-                    response = self.process_task(task)
+                    self.process_task(task)
                     print(f"\n{'=' * 60}")
                     print("Task completed.")
                     print(f"{'=' * 60}\n")
                 except Exception as e:
                     if self.debug:
                         import traceback
+
                         traceback.print_exc()
                     print(f"\nError processing task: {e}\n")
 
@@ -751,14 +770,24 @@ class AgentV3:
                 depth_display = depth_image.copy()
 
                 cv2.putText(
-                    color_display, "Click to move arm | Q=quit",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
+                    color_display,
+                    "Click to move arm | Q=quit",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0),
+                    2,
                 )
 
                 x, y, z = self.motion.get_pose()
                 cv2.putText(
-                    color_display, f"Arm: x={x:.0f} y={y:.0f} z={z:.0f}",
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1,
+                    color_display,
+                    f"Arm: x={x:.0f} y={y:.0f} z={z:.0f}",
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    1,
                 )
 
                 if clicked_pixel[0]:
@@ -769,12 +798,22 @@ class AgentV3:
                         cv2.line(img, (cx, cy - 12), (cx, cy + 12), (0, 0, 255), 1)
 
                 cv2.putText(
-                    color_display, "COLOR", (10, color_display.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                    color_display,
+                    "COLOR",
+                    (10, color_display.shape[0] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
                 cv2.putText(
-                    depth_display, "DEPTH", (10, depth_display.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                    depth_display,
+                    "DEPTH",
+                    (10, depth_display.shape[0] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
 
                 combined = np.hstack([color_display, depth_display])
@@ -805,7 +844,11 @@ class AgentV3:
                     print("  Camera->arm transform failed — skipping.")
                     continue
 
-                target_x, target_y, target_z = float(arm_3d[0]), float(arm_3d[1]), float(arm_3d[2])
+                target_x, target_y, target_z = (
+                    float(arm_3d[0]),
+                    float(arm_3d[1]),
+                    float(arm_3d[2]),
+                )
 
                 print(
                     f"\n  Click: pixel=({px},{py}) depth={depth_mm:.0f}mm\n"

@@ -82,8 +82,10 @@ def main() -> int:
             return 1
 
     # Resolve calibration path (shared with agent_v2)
-    calibration_path = Path(args.calibration) if args.calibration else (
-        Path(__file__).parent.parent / "agent_v2" / "calibration_data.json"
+    calibration_path = (
+        Path(args.calibration)
+        if args.calibration
+        else (Path(__file__).parent.parent / "agent_v2" / "calibration_data.json")
     )
 
     try:
@@ -149,6 +151,7 @@ def main() -> int:
     except Exception as e:
         if args.debug:
             import traceback
+
             traceback.print_exc()
         else:
             print(f"Error: {e}")

@@ -74,6 +74,7 @@ class RealSenseCamera:
     def _save_debug_image(self) -> None:
         """Save a debug image on startup."""
         import time
+
         # Wait a moment for camera to stabilize
         time.sleep(0.5)
         try:
@@ -109,36 +110,86 @@ class RealSenseCamera:
         # Draw X axis (vertical line going up from origin - like 12 o'clock)
         cv2.line(image, (center_x, center_y), (center_x, x_end_y), x_color, 2)
         # X axis arrow head
-        cv2.arrowedLine(image, (center_x, x_end_y + 20), (center_x, x_end_y), x_color, 2, tipLength=0.5)
+        cv2.arrowedLine(
+            image,
+            (center_x, x_end_y + 20),
+            (center_x, x_end_y),
+            x_color,
+            2,
+            tipLength=0.5,
+        )
         # X label
-        cv2.putText(image, "X", (center_x + 10, x_end_y + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, x_color, 2)
+        cv2.putText(
+            image,
+            "X",
+            (center_x + 10, x_end_y + 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            x_color,
+            2,
+        )
 
         # Draw X axis ticks (every 100mm)
         for i in range(1, 5):  # 100, 200, 300, 400mm
             tick_y = int(center_y - i * x_pixels_per_100mm)
-            cv2.line(image, (center_x - 5, tick_y), (center_x + 5, tick_y), tick_color, 1)
-            cv2.putText(image, f"{i*100}", (center_x + 8, tick_y + 4),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.35, tick_color, 1)
+            cv2.line(
+                image, (center_x - 5, tick_y), (center_x + 5, tick_y), tick_color, 1
+            )
+            cv2.putText(
+                image,
+                f"{i * 100}",
+                (center_x + 8, tick_y + 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                tick_color,
+                1,
+            )
 
         # Draw Y axis (horizontal line going right from bottom center - like 3 o'clock)
         cv2.line(image, (center_x, center_y), (w - 30, center_y), y_color, 2)
         # Y axis arrow head
-        cv2.arrowedLine(image, (w - 50, center_y), (w - 30, center_y), y_color, 2, tipLength=0.5)
+        cv2.arrowedLine(
+            image, (w - 50, center_y), (w - 30, center_y), y_color, 2, tipLength=0.5
+        )
         # Y label
-        cv2.putText(image, "Y", (w - 40, center_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, y_color, 2)
+        cv2.putText(
+            image,
+            "Y",
+            (w - 40, center_y - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            y_color,
+            2,
+        )
 
         # Draw Y axis ticks (every 100mm)
         for i in range(1, 9):  # 100, 200, ... 800mm
             tick_x = int(center_x + i * y_pixels_per_100mm)
             if tick_x < w - 40:  # Don't draw past arrow
-                cv2.line(image, (tick_x, center_y - 5), (tick_x, center_y + 5), tick_color, 1)
-                cv2.putText(image, f"{i*100}", (tick_x - 10, center_y + 18),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.35, tick_color, 1)
+                cv2.line(
+                    image, (tick_x, center_y - 5), (tick_x, center_y + 5), tick_color, 1
+                )
+                cv2.putText(
+                    image,
+                    f"{i * 100}",
+                    (tick_x - 10, center_y + 18),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.35,
+                    tick_color,
+                    1,
+                )
 
         # Draw origin point
         cv2.circle(image, (center_x, center_y), 5, (255, 255, 255), -1)
-        cv2.putText(image, "0", (center_x - 15, center_y + 18),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, tick_color, 1)
+        cv2.putText(
+            image,
+            "0",
+            (center_x - 15, center_y + 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            tick_color,
+            1,
+        )
 
         return image
 
@@ -156,13 +207,17 @@ class RealSenseCamera:
 
         # Create a vertical gradient (0-255) and apply Jet colormap
         # RealSense: red=close, blue=far (inverted from standard Jet)
-        gradient = np.linspace(0, 255, bar_height).astype(np.uint8).reshape(bar_height, 1)
+        gradient = (
+            np.linspace(0, 255, bar_height).astype(np.uint8).reshape(bar_height, 1)
+        )
         gradient_color = cv2.applyColorMap(gradient, cv2.COLORMAP_JET)
 
         # Draw the gradient bar: top = close (red), bottom = far (blue)
         # Jet: 0=blue, 255=red, so use directly (top gets high values = red = close)
         for i in range(bar_height):
-            color = gradient_color[bar_height - 1 - i, 0]  # top=red(close), bottom=blue(far)
+            color = gradient_color[
+                bar_height - 1 - i, 0
+            ]  # top=red(close), bottom=blue(far)
             cv2.line(
                 image,
                 (bar_x, bar_y + i),
@@ -173,7 +228,11 @@ class RealSenseCamera:
 
         # Draw border
         cv2.rectangle(
-            image, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (255, 255, 255), 1
+            image,
+            (bar_x, bar_y),
+            (bar_x + bar_width, bar_y + bar_height),
+            (255, 255, 255),
+            1,
         )
 
         # Helper to draw outlined text (black outline, white fill)
@@ -181,7 +240,9 @@ class RealSenseCamera:
             # Draw black outline
             cv2.putText(image, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
             # Draw white text on top
-            cv2.putText(image, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            cv2.putText(
+                image, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1
+            )
 
         # Add distance labels: top = close (min), bottom = far (max)
         draw_text(f"{min_depth_m:.2f}m", (bar_x - 52, bar_y + 12))

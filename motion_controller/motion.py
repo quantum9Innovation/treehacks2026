@@ -27,6 +27,7 @@ def detect_serial_port() -> str | None:
         print("Please specify one with --port")
     return None
 
+
 # Arm geometry (calibrated against arm's internal FK over 71 data points, RMS ~8mm)
 L1 = 234.63  # shoulder to elbow (mm)
 L2 = 285.35  # elbow to end effector (mm)
@@ -59,13 +60,15 @@ def ik(x, y, z):
     z_adj = z - Z_OFF
 
     d_sq = r * r + z_adj * z_adj
-    d = math.sqrt(d_sq)
+    math.sqrt(d_sq)
 
     cos_elbow = (d_sq - L1 * L1 - L2 * L2) / (2 * L1 * L2)
     cos_elbow = max(-1.0, min(1.0, cos_elbow))
     elbow = math.acos(cos_elbow)
 
-    shoulder = math.atan2(r, z_adj) - math.atan2(L2 * math.sin(elbow), L1 + L2 * cos_elbow)
+    shoulder = math.atan2(r, z_adj) - math.atan2(
+        L2 * math.sin(elbow), L1 + L2 * cos_elbow
+    )
 
     return [base, shoulder, elbow, 0]
 
@@ -116,7 +119,9 @@ class Motion:
         Inverted mode: holds shoulder=0 (straight down) and slowly straightens
         elbow from π/2 → 0, extending the arm toward the ground.
         """
-        print(f"Probing ground at base={math.degrees(base_angle):.0f}° (inverted={self.inverted})")
+        print(
+            f"Probing ground at base={math.degrees(base_angle):.0f}° (inverted={self.inverted})"
+        )
 
         if self.inverted:
             return self._probe_ground_inverted(base_angle)
@@ -266,7 +271,7 @@ class Motion:
             time.sleep(0.1)
             fb = self._feedback()
             ax, ay, az = fk(fb[3], fb[4], fb[5])
-            err = math.sqrt((x - ax)**2 + (y - ay)**2 + (native_z - az)**2)
+            err = math.sqrt((x - ax) ** 2 + (y - ay) ** 2 + (native_z - az) ** 2)
             if err < POSITION_TOLERANCE:
                 self.last_move_error_mm = err
                 return True
@@ -301,9 +306,7 @@ class Motion:
         ground_joints[2] = max(-0.873, min(math.pi, ground_joints[2]))
 
         # Start smooth descent, then re-baseline after initial transient
-        self.arm.joints_radian_ctrl(
-            radians=ground_joints, speed=PROBE_SPEED, acc=100
-        )
+        self.arm.joints_radian_ctrl(radians=ground_joints, speed=PROBE_SPEED, acc=100)
         time.sleep(0.5)
         for _ in range(3):
             self._get_torques()
@@ -356,9 +359,7 @@ class Motion:
         return x, y, self._from_native_z(z)
 
     def home(self):
-        self.arm.joints_radian_ctrl(
-            radians=[0, 0, math.pi / 2, 0], speed=2000, acc=200
-        )
+        self.arm.joints_radian_ctrl(radians=[0, 0, math.pi / 2, 0], speed=2000, acc=200)
 
     def _feedback(self):
         """Call feedback_get() with SDK stdout suppressed."""
@@ -385,13 +386,13 @@ if __name__ == "__main__":
     m = Motion()
     m.probe_ground()
 
-    print(f"\nMoving to Z=150 above ground...")
+    print("\nMoving to Z=150 above ground...")
     m.move_to(0, 200, 150)
     time.sleep(1)
     pose = m.get_pose()
     print(f"Pose: x={pose[0]:.1f} y={pose[1]:.1f} z={pose[2]:.1f}")
 
-    print(f"\nMoving to Z=10 above ground...")
+    print("\nMoving to Z=10 above ground...")
     m.move_to(0, 200, 10)
     time.sleep(1)
     pose = m.get_pose()
