@@ -133,6 +133,32 @@ def helix(monitor_arm, right_arm, back_arm, left_arm):
         time.sleep(delay)
 
 
+def lorenz(monitor_arm, right_arm, back_arm, left_arm):
+    data = load("trajectories/lorenz.json")
+    stream = data["trajectory"]
+    delay = data["delay"]
+
+    for x, y, z, t in stream:
+        right_arm.pose_ctrl([x, y, z, t])
+        left_arm.pose_ctrl([x, y, z, t])
+        monitor_arm.pose_ctrl([x, y, z, t])
+        back_arm.pose_ctrl([x, y, z, t])
+        time.sleep(delay)
+
+
+def rossler(monitor_arm, right_arm, back_arm, left_arm):
+    data = load("trajectories/rossler.json")
+    stream = data["trajectory"]
+    delay = data["delay"]
+
+    for x, y, z, t in stream:
+        right_arm.pose_ctrl([x, y, z, t])
+        left_arm.pose_ctrl([x, y, z, t])
+        monitor_arm.pose_ctrl([x, y, z, t])
+        back_arm.pose_ctrl([x, y, z, t])
+        time.sleep(delay)
+
+
 def main():
     back_port = "/dev/ttyUSB0"
     right_port = "/dev/ttyUSB1"
@@ -163,7 +189,7 @@ def main():
 
     try:
         while True:
-            helix(monitor_arm, right_arm, back_arm, left_arm)
+            rossler(monitor_arm, right_arm, back_arm, left_arm)
 
     except KeyboardInterrupt:
         print("Exiting...")
