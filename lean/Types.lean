@@ -1,6 +1,8 @@
 abbrev Coordinate : Type := Float
 abbrev Millimeters : Type := Float
 abbrev Degrees : Type := Float
+abbrev Seconds : Type := Float
+abbrev Hertz : Type := Float
 
 structure Point2D where
   x : Coordinate

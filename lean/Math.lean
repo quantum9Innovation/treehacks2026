@@ -28,9 +28,15 @@ def lemniscate (a t : Float) : Point2D :=
     
 def wave (a μ t : Float) : Point2D :=
   {x := t, y := a * Float.sin (t * (2 * π) / μ)}
-    
+  
+def spring (x A ω ϕ t : Float) : Point2D :=
+  {x := x, y := A * Float.cos (ω * t / (2 * π) - ϕ)}
+
 def lorenz (σ ρ β: Float) (vec : Point3D) : Derivative3D :=
   {x := σ * (vec.y - vec.x), y := vec.x * (ρ - vec.z) - vec.y, z := vec.x * vec.y - β * vec.z}
+  
+def rossler (a b c: Float) (vec : Point3D) : Derivative3D :=
+  {x := -vec.y - vec.z, y := vec.x + a * vec.y, z := b + vec.z * (vec.x - c)}
   
 def helix (radius height : Float) (turns : Nat) (t : Float) : Point3D :=
   let overTurns := 1 / (Float.ofNat turns)

@@ -99,8 +99,9 @@ def detect_serial_port():
 
 def main(stdscr):
     stdscr.nodelay(True)
-    # ports = ["/dev/ttyUSB0", "/dev/ttyUSB1"]
-    ports = [detect_serial_port()]
+    # ports = ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3"]
+    ports = ["/dev/ttyUSB0", "/dev/ttyUSB1"]
+    # ports = [detect_serial_port()]
 
     if len(ports) == 0:
         print("Error: No USB serial device found. Connect the arm or use --port.")
@@ -125,20 +126,22 @@ def main(stdscr):
         if loop:
             while True:
                 stream = load(trajectories[0])["trajectory"]
+                local_delay = load(trajectories[0])["delay"]
                 for x, y, z, t in stream:
                     pose = Pose((x, y, z, t))
                     for arm in arms:
                         arm.pose_ctrl([x, y, z, t])
-                    time.sleep(delay)
+                    time.sleep(local_delay)
 
         if not skip:
             for trajectory in trajectories:
                 stream = load(trajectory)["trajectory"]
+                local_delay = load(trajectory)["delay"]
                 for x, y, z, t in stream:
                     pose = Pose((x, y, z, t))
                     for arm in arms:
                         arm.pose_ctrl([x, y, z, t])
-                    time.sleep(delay)
+                    time.sleep(local_delay)
 
         pose = Pose((250, 0, 250, 0))
         while True:

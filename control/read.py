@@ -8,10 +8,12 @@ TrajectoryPoint = tuple[float, float, float, float]
 
 class Data(TypedDict):
     trajectory: list[TrajectoryPoint]
+    delay: float
 
 
 class JSONData(TypedDict):
-    trajectory: list[Data]
+    trajectory: list[list[float]]
+    delay: float
 
 
 def load(path: str) -> Data:
@@ -22,4 +24,4 @@ def load(path: str) -> Data:
         (float(x), float(y), float(z), float(t)) for x, y, z, t in raw["trajectory"]
     ]
 
-    return {"trajectory": trajectory}
+    return {"trajectory": trajectory, "delay": raw["delay"]}
