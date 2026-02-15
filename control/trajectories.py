@@ -39,58 +39,51 @@ def detect_serial_port():
         return None
 
 
-def double_lemniscate(right_arm, front_arm, back_arm, left_arm):
+def double_lemniscate(monitor_arm, right_arm, back_arm, left_arm):
     data = load("trajectories/lemniscate.json")
     stream = data["trajectory"]
     delay = data["delay"]
 
     for x, y, z, t in stream:
-        right_arm.pose_ctrl([100, 0, 75, 0])
-        front_arm.pose_ctrl([100, 0, 75, 0])
+        monitor_arm.pose_ctrl([100, 0, 75, 0])
         back_arm.pose_ctrl([100, 0, 75, 0])
+        right_arm.pose_ctrl([x, y, z, t])
         left_arm.pose_ctrl([x, y, z, t])
 
     time.sleep(delay)
 
 
 def main():
-    front_port = "/dev/ttyUSB0"
+    port_right = "/dev/ttyUSB0"
     back_port = "/dev/ttyUSB1"
-    right_port = "/dev/ttyUSB2"
+    port_monitor = "/dev/ttyUSB2"
     left_port = "/dev/ttyUSB3"
-    ports = [front_port, back_port, right_port, left_port]
+    ports = [port_right, back_port, port_monitor, left_port]
 
     if len(ports) == 0:
         print("Error: No USB serial device found. Connect the arm or use --port.")
         sys.exit(1)
 
     print(f"Connecting to RoArm-M2 on {ports}...")
-    front_arm = roarm(roarm_type="roarm_m2", port=front_port, baudrate=115200)
-    front_arm.echo_set(0)
-    front_arm.torque_set(1)
+    right_arm = roarm(roarm_type="roarm_m2", port=port_right, baudrate=115200)
+    right_arm.echo_set(0)
+    right_arm.torque_set(1)
 
     back_arm = roarm(roarm_type="roarm_m2", port=back_port, baudrate=115200)
     back_arm.echo_set(0)
     back_arm.torque_set(1)
 
-    right_arm = roarm(roarm_type="roarm_m2", port=right_port, baudrate=115200)
-    right_arm.echo_set(0)
-    right_arm.torque_set(1)
+    monitor_arm = roarm(roarm_type="roarm_m2", port=port_monitor, baudrate=115200)
+    monitor_arm.echo_set(0)
+    monitor_arm.torque_set(1)
 
     left_arm = roarm(roarm_type="roarm_m2", port=left_port, baudrate=115200)
     left_arm.echo_set(0)
     left_arm.torque_set(1)
 
-    print("Moving to home position...")
-
-    right_arm.pose_ctrl([100, 0, 75, 0])
-    front_arm.pose_ctrl([100, 0, 75, 0])
-    back_arm.pose_ctrl([100, 0, 75, 0])
-    time.sleep(1)
-
     try:
         while True:
-            double_lemniscate(right_arm, front_arm, back_arm, left_arm)
+            double_lemniscate(monitor_arm, right_arm, back_arm, left_arm)
 
     except KeyboardInterrupt:
         print("Exiting...")
