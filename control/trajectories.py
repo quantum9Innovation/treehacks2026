@@ -41,7 +41,7 @@ def detect_serial_port():
 
 def main():
     # ports = ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3"]
-    ports = ["/dev/ttyUSB0", "/dev/ttyUSB1"]
+    ports = ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3"]
     # ports = [detect_serial_port()]
 
     if len(ports) == 0:
@@ -58,16 +58,21 @@ def main():
 
     for arm in arms:
         arm.move_init()
+        arm.pose_ctrl([250, 0, 200, 0])
         time.sleep(1)
 
+    arms[0]
+    standby = arms[1:]
+    trajectory = "trajectories/lemniscate.json"
     try:
         while True:
-            stream = load(trajectories[0])["trajectory"]
-            local_delay = load(trajectories[0])["delay"]
-            for x, y, z, t in stream:
-                for arm in arms:
-                    arm.pose_ctrl([x, y, z, t])
-                time.sleep(local_delay)
+            load(trajectory)["trajectory"]
+            load(trajectory)["delay"]
+            for arm in standby:
+                arm.pose_ctrl([250, 0, 200, 0])
+            # for x, y, z, t in stream:
+            #     action_arm.pose_ctrl([x, y, z, t])
+            #     time.sleep(local_delay)
     except KeyboardInterrupt:
         print("Exiting...")
 

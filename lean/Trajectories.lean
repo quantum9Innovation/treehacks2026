@@ -5,7 +5,7 @@ open Nat
 
 -- constants
 def limit : Float := 490
-def floor : Millimeters := 200
+def floor : Millimeters := 100
 def maxGrip : Float := 90
 
 -- lemniscate
