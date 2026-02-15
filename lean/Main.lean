@@ -71,7 +71,7 @@ def rosslerTrajectory : List Pose := createCurveTrajectory Rossler.pointSamples
 def helixTrajectory : List Pose := createCurveTrajectory Helix.pointSamples
 
 def main : IO Unit := do
-  writeTrajectory (trajectoryDir ++ "lemniscate.json") lemniscateTrajectory 0.01
+  writeTrajectory (trajectoryDir ++ "lemniscate.json") lemniscateTrajectory 0.005
   writeTrajectory (trajectoryDir ++ "wave.json") waveTrajectory 0.02
   writeTrajectory (trajectoryDir ++ "spring.json") springTrajectory 0.02
   writeTrajectory (trajectoryDir ++ "lorenz.json") lorenzTrajectory 0.02
