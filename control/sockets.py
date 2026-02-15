@@ -1,11 +1,14 @@
 """WebSocket client to read HMD pose data and control RoArm-M2 joint 4."""
 
 import asyncio
-import curses
 import glob
 import json
 import math
+import select
 import sys
+import termios
+import threading
+import tty
 
 import websockets
 from roarm_sdk.roarm import roarm
@@ -15,6 +18,36 @@ ZERO_JOINT1 = 90
 ZERO_JOINT2 = 0
 ZERO_JOINT3 = 180
 ZERO_JOINT4 = 0
+
+# Global flag for space key press detection
+space_pressed = threading.Event()
+
+
+def keyboard_listener():
+    """
+    Background thread that listens for space key press.
+    Sets the global space_pressed event when space is detected.
+    Works over SSH by using raw terminal mode.
+    """
+    # Save original terminal settings
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    try:
+        # Set terminal to raw mode (no buffering, no echo)
+        tty.setraw(fd)
+
+        while True:
+            # Use select to check if input is available (non-blocking)
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                ch = sys.stdin.read(1)
+                if ch == " ":
+                    space_pressed.set()
+                elif ch == "\x03":  # Ctrl+C
+                    break
+    finally:
+        # Restore original terminal settings
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def detect_serial_port():
@@ -92,9 +125,8 @@ def clip_joint3_angle(xrot_degrees: float) -> float:
     return max(-0.8726646, min(xrot_rad, 3.1415926))
 
 
-async def control_arm_from_pose(stdscr):
+async def control_arm_from_pose():
     """Connect to pose WebSocket and control arm joint 3 with xrot."""
-    stdscr.nodelay(True)
     uri = "ws://10.19.182.3:8766"
 
     # Detect and connect to arm
@@ -110,6 +142,12 @@ async def control_arm_from_pose(stdscr):
     # Zero reference values from HMD
     xrot_zero = 0.0
     yrot_zero = 0.0
+
+    # Start keyboard listener thread
+    listener_thread = threading.Thread(target=keyboard_listener, daemon=True)
+    listener_thread.start()
+
+    print("Press SPACE to zero out arm controls, Ctrl+C to exit")
 
     try:
         async with websockets.connect(uri) as websocket:
@@ -132,21 +170,20 @@ async def control_arm_from_pose(stdscr):
                 message = await websocket.recv()
                 data = json.loads(message)
 
-                # Check for spacebar press
-                try:
-                    key = stdscr.getkey()
-                    if key == " ":
-                        # Store new zero reference angles
-                        xrot_zero = data["xrot"]
-                        yrot_zero = data["yrot"]
+                # Check if space key was pressed
+                if space_pressed.is_set():
+                    space_pressed.clear()  # Reset the flag
 
-                        # Zero the arm to preconfigured position
-                        arm.joint_radian_ctrl(1, math.radians(ZERO_JOINT1), 2048, 127)
-                        arm.joint_radian_ctrl(2, math.radians(ZERO_JOINT2), 2048, 127)
-                        arm.joint_radian_ctrl(3, math.radians(ZERO_JOINT3), 2048, 127)
-                        arm.joint_radian_ctrl(4, math.radians(ZERO_JOINT4), 2048, 127)
-                except curses.error:
-                    pass
+                    # Store new zero reference angles
+                    xrot_zero = data["xrot"]
+                    yrot_zero = data["yrot"]
+
+                    # Zero the arm to preconfigured position
+                    arm.joint_radian_ctrl(1, math.radians(ZERO_JOINT1), 2048, 127)
+                    arm.joint_radian_ctrl(2, math.radians(ZERO_JOINT2), 2048, 127)
+                    arm.joint_radian_ctrl(3, math.radians(ZERO_JOINT3), 2048, 127)
+                    arm.joint_radian_ctrl(4, math.radians(ZERO_JOINT4), 2048, 127)
+                    print("Zeroed arm controls")
 
                 # Calculate angle differences accounting for wraparound
                 xrot_diff = normalize_angle_difference(data["xrot"], xrot_zero)
@@ -194,17 +231,17 @@ async def read_pose_stream():
         pass
 
 
-def main(stdscr):
+def main():
     """Main entry point."""
     import sys
 
     if len(sys.argv) > 1 and sys.argv[1] == "--control":
         # Control arm mode
-        asyncio.run(control_arm_from_pose(stdscr))
+        asyncio.run(control_arm_from_pose())
     else:
         # Print only mode
         asyncio.run(read_pose_stream())
 
 
 if __name__ == "__main__":
-    curses.wrapper(main)
+    main()
