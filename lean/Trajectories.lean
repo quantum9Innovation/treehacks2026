@@ -11,9 +11,9 @@ def maxGrip : Float := 90
 -- lemniscate
 namespace Lemniscate
 
-def radius : Millimeters := 500
+def radius : Millimeters := 350
 def squish : Float := 0.4
-def nSamples : Nat := 200
+def nSamples : Nat := 150
 def parametricBounds : Bounds := {min := 0, max := 2 * Math.π}
 def tSamples : List Float := Math.linspace parametricBounds nSamples
 def lemniscatePlane : Traceable2D :=
