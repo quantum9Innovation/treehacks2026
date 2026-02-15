@@ -40,7 +40,7 @@ end Wave
 namespace Spring
 
 def tilt : Millimeters := 20
-def amplitude : Millimeters := 80
+def amplitude : Millimeters := 120
 def frequency : Hertz := 1.5
 def phaseShift : Float := 0
 def nSamples : Nat := 200
