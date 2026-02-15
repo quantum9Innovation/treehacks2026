@@ -17,11 +17,21 @@ interface CameraFeedProps {
 }
 
 export function CameraFeed({ onSegmentResult, onClickInfo, showToolbar = true }: CameraFeedProps) {
-  const { state } = useRobot()
-  const { videoRef, connected } = useWebRTCStream()
+  const { state, dispatch } = useRobot()
+  const { videoRef, connected, switchTrack } = useWebRTCStream()
   const containerRef = useRef<HTMLDivElement>(null)
   const [segmentOverlay, setSegmentOverlay] = useState<string | null>(null)
   const [showGrid, setShowGrid] = useState(true)
+
+  // Sync WebRTC connection state to global robot state
+  useEffect(() => {
+    dispatch({ type: 'SET_CAMERA_CONNECTED', payload: connected })
+  }, [connected, dispatch])
+
+  // Switch WebRTC track when camera view changes
+  useEffect(() => {
+    switchTrack(state.cameraView === 'depth' ? 1 : 0)
+  }, [state.cameraView, switchTrack])
 
   const handleClick = useCallback(
     async (e: React.MouseEvent<HTMLDivElement>) => {

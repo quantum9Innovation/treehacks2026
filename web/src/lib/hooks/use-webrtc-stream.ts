@@ -17,12 +17,14 @@ export function useWebRTCStream() {
       })
       pcRef.current = pc
 
+      let trackCount = 0
       pc.ontrack = (event) => {
         setTracks((prev) => [...prev, event.track])
-        // Attach first track by default
-        if (videoRef.current && event.streams[0]) {
+        // Attach only the first track (color) by default
+        if (trackCount === 0 && videoRef.current && event.streams[0]) {
           videoRef.current.srcObject = event.streams[0]
         }
+        trackCount++
       }
 
       pc.onconnectionstatechange = () => {
