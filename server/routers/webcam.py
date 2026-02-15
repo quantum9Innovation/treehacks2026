@@ -8,7 +8,7 @@ import time
 from typing import Optional
 
 import cv2
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger("server.routers.webcam")
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/webcam", tags=["webcam"])
 # Module-level state (started/stopped via lifespan helpers)
 # ---------------------------------------------------------------------------
 _latest_jpeg: Optional[bytes] = None
-_jpeg_lock = threading.Lock()
+_frame_ready = threading.Condition()
 _stop_flag = False
 _capture_thread: Optional[threading.Thread] = None
 _discovery_thread: Optional[threading.Thread] = None
@@ -57,38 +57,39 @@ def _capture_loop(
         logger.error("Could not open webcam device %s", device)
         return
 
+    # Request MJPEG from the camera so the driver delivers pre-compressed
+    # frames instead of raw YUYV that OpenCV must software-convert.
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
     cap.set(cv2.CAP_PROP_FPS, float(fps))
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
+    fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+    fourcc_str = "".join(chr((fourcc_int >> (8 * i)) & 0xFF) for i in range(4))
     logger.info(
-        "Webcam opened: device=%s resolution=%dx%d fps=%.1f",
-        device, actual_w, actual_h, actual_fps,
+        "Webcam opened: device=%s resolution=%dx%d fps=%.1f fourcc=%s",
+        device, actual_w, actual_h, actual_fps, fourcc_str,
     )
 
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
-    frame_interval = 1.0 / max(1, fps)
 
     try:
         while not _stop_flag:
-            t0 = time.time()
             ok, frame = cap.read()
             if not ok or frame is None:
-                time.sleep(0.05)
+                time.sleep(0.01)
                 continue
 
             ok, buf = cv2.imencode(".jpg", frame, encode_params)
             if ok:
-                with _jpeg_lock:
-                    _latest_jpeg = buf.tobytes()
-
-            dt = time.time() - t0
-            sleep_for = frame_interval - dt
-            if sleep_for > 0:
-                time.sleep(sleep_for)
+                jpg = buf.tobytes()
+                with _frame_ready:
+                    _latest_jpeg = jpg
+                    _frame_ready.notify_all()
     finally:
         cap.release()
         logger.info("Webcam capture stopped")
@@ -160,27 +161,31 @@ def start_webcam(
 
 
 def stop_webcam() -> None:
-    """Signal threads to stop."""
+    """Signal threads to stop and wake any waiting generators."""
     global _stop_flag
     _stop_flag = True
+    with _frame_ready:
+        _frame_ready.notify_all()
 
 
 # ---------------------------------------------------------------------------
 # MJPEG generator
 # ---------------------------------------------------------------------------
 def _mjpeg_generator():
-    while True:
-        with _jpeg_lock:
+    while not _stop_flag:
+        with _frame_ready:
+            _frame_ready.wait(timeout=1.0)
             jpg = _latest_jpeg
         if jpg is None:
-            time.sleep(0.02)
             continue
 
-        yield b"--frame\r\n"
-        yield b"Content-Type: image/jpeg\r\n"
-        yield f"Content-Length: {len(jpg)}\r\n\r\n".encode()
-        yield jpg
-        yield b"\r\n"
+        # Yield the entire frame as one chunk to avoid per-yield flush overhead.
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n"
+            + jpg + b"\r\n"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +207,6 @@ async def mjpeg_stream():
 @router.get("/health")
 async def webcam_health():
     """Quick check that the webcam capture is producing frames."""
-    with _jpeg_lock:
+    with _frame_ready:
         has_frame = _latest_jpeg is not None
     return {"ok": has_frame}

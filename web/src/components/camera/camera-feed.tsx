@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRobot } from '@/lib/robot-context'
 import { useWebRTCStream } from '@/lib/hooks/use-webrtc-stream'
 import { visionApi, armApi } from '@/lib/api'
