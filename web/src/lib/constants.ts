@@ -1,7 +1,7 @@
 /** Application constants. */
 
-export const API_BASE = 'http://localhost:8420'
-export const WS_URL = 'ws://localhost:8420/ws'
+export const API_BASE = ''
+export const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
 
 export const STEP_SIZES = [5, 10, 25, 50] as const
 export const DEFAULT_STEP_SIZE = 25

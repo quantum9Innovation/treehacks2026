@@ -35,17 +35,24 @@ class HardwareManager:
         sam2_device: str = "auto",
         calibration_path: str = "agent_v2/calibration_data.json",
         mock: bool = False,
+        enable_sam2: bool = True,
+        enable_gemini_vision: bool = True,
+        google_api_key: str = "",
     ):
         self._arm_port = arm_port
         self._sam2_model = sam2_model
         self._sam2_device = sam2_device
         self._calibration_path = calibration_path
         self._mock = mock
+        self._enable_sam2 = enable_sam2
+        self._enable_gemini_vision = enable_gemini_vision
+        self._google_api_key = google_api_key
 
         self.camera = None
         self.motion = None
         self.sam2 = None
         self.ct = None
+        self.gemini_vision = None
 
         self._latest_frame: FrameBundle | None = None
         self._capture_task: asyncio.Task | None = None
@@ -77,17 +84,29 @@ class HardwareManager:
 
         from agent.camera import RealSenseCamera
         from agent_v2.coordinate_transform import CoordinateTransform
-        from agent_v2.vision.sam2_backend import SAM2Backend
         from motion_controller.motion import Motion
 
         logger.info("Initializing camera...")
         self.camera = RealSenseCamera()
         self.camera.start()
 
-        logger.info(f"Loading SAM2 ({self._sam2_model})...")
-        self.sam2 = SAM2Backend(
-            model_size=self._sam2_model, device=self._sam2_device
-        )
+        if self._enable_sam2:
+            from agent_v2.vision.sam2_backend import SAM2Backend
+            logger.info(f"Loading SAM2 ({self._sam2_model})...")
+            self.sam2 = SAM2Backend(
+                model_size=self._sam2_model, device=self._sam2_device
+            )
+        else:
+            logger.info("SAM2 disabled")
+
+        if self._enable_gemini_vision and self._google_api_key:
+            from google import genai
+            from agent_v3.gemini_vision import GeminiVision
+            logger.info("Initializing Gemini ER vision...")
+            vision_client = genai.Client(api_key=self._google_api_key)
+            self.gemini_vision = GeminiVision(client=vision_client)
+        else:
+            logger.info("Gemini Vision disabled")
 
         logger.info("Initializing coordinate transform...")
         self.ct = CoordinateTransform(

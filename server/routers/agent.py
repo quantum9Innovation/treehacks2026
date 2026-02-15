@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from ..agent_wrapper import WebAgentV2
+from ..agent_wrapper import WebAgentV3
 from ..config import Settings
 from ..events import EventBus
 from ..hardware import HardwareManager
@@ -15,23 +15,36 @@ logger = logging.getLogger("server.routers.agent")
 router = APIRouter(tags=["agent"])
 
 # Singleton agent (created on first task submission)
-_agent: WebAgentV2 | None = None
+_agent: WebAgentV3 | None = None
 
 
-def _get_or_create_agent(request: Request) -> WebAgentV2:
+def _get_or_create_agent(request: Request) -> WebAgentV3:
     global _agent
     if _agent is None:
         hw: HardwareManager = request.app.state.hardware
         bus: EventBus = request.app.state.event_bus
         settings: Settings = request.app.state.settings
-        _agent = WebAgentV2(
-            hw=hw,
-            bus=bus,
-            openai_api_key=settings.openai_api_key,
-            helicone_api_key=settings.helicone_api_key,
-            model=settings.llm_model,
-            reasoning_effort=settings.reasoning_effort,
-        )
+
+        # Build LLM provider based on settings
+        if settings.llm_provider == "gemini":
+            from agent_v3.llm import GeminiProvider
+
+            provider = GeminiProvider(
+                google_api_key=settings.google_api_key,
+                model=settings.gemini_model,
+                thinking_budget=settings.gemini_thinking_budget,
+            )
+        else:  # "openai" (default)
+            from agent_v3.llm import OpenAIProvider
+
+            provider = OpenAIProvider(
+                openai_api_key=settings.openai_api_key,
+                helicone_api_key=settings.helicone_api_key,
+                model=settings.llm_model,
+                reasoning_effort=settings.reasoning_effort,
+            )
+
+        _agent = WebAgentV3(hw=hw, bus=bus, provider=provider)
     return _agent
 
 
