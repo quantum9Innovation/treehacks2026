@@ -24,6 +24,7 @@ def detect_serial_port():
         "/dev/cu.usbmodem*",
         "/dev/ttyUSB*",
         "/dev/ttyACM*",
+        "/dev/ARM*",
     ]
 
     devices = []

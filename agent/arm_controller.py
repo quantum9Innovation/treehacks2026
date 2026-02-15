@@ -11,6 +11,7 @@ SERIAL_GLOB_PATTERNS = [
     "/dev/cu.usbmodem*",
     "/dev/ttyUSB*",
     "/dev/ttyACM*",
+    "/dev/ARM*",
 ]
 
 DEFAULT_Z_OFFSET = 300.0
