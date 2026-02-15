@@ -69,6 +69,22 @@ class LLMProvider(ABC):
         """Encode a text string as a content part for this provider."""
         ...
 
+    @abstractmethod
+    def find_image_message_indices(self, messages: list[Any]) -> list[int]:
+        """Return indices of all messages that contain image content."""
+        ...
+
+    @abstractmethod
+    def replace_images_with_text(self, messages: list[Any], message_index: int,
+                                  summary_text: str) -> None:
+        """Replace image content in the message at message_index with a text summary."""
+        ...
+
+    @abstractmethod
+    def extract_assistant_text(self, messages: list[Any], message_index: int) -> str | None:
+        """Extract text content from an assistant/model message at the given index."""
+        ...
+
 
 class OpenAIProvider(LLMProvider):
     """OpenAI GPT provider using chat.completions with function calling."""
@@ -112,10 +128,9 @@ class OpenAIProvider(LLMProvider):
             "tool_choice": "auto",
         }
 
-        if "o1" in self.model.lower() or "o3" in self.model.lower():
-            request_kwargs["extra_body"] = {
-                "reasoning_effort": self.reasoning_effort,
-            }
+        request_kwargs["extra_body"] = {
+            "reasoning_effort": self.reasoning_effort,
+        }
 
         response = self.client.chat.completions.create(**request_kwargs)
 
@@ -164,6 +179,51 @@ class OpenAIProvider(LLMProvider):
     def encode_text(self, text: str) -> dict:
         return {"type": "text", "text": text}
 
+    def find_image_message_indices(self, messages: list[dict]) -> list[int]:
+        indices = []
+        for i, msg in enumerate(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            if any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+                indices.append(i)
+        return indices
+
+    def replace_images_with_text(self, messages: list[dict], message_index: int,
+                                  summary_text: str) -> None:
+        msg = messages[message_index]
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            text_parts = [
+                p.get("text", "") for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            existing = " ".join(t for t in text_parts if t)
+            combined = f"[Previous frame summary: {summary_text}]"
+            if existing:
+                combined += f" {existing}"
+            messages[message_index] = {"role": "user", "content": combined}
+
+    def extract_assistant_text(self, messages: list[dict], message_index: int) -> str | None:
+        if message_index < 0 or message_index >= len(messages):
+            return None
+        msg = messages[message_index]
+        if msg.get("role") != "assistant":
+            return None
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            texts = [
+                p.get("text", "") for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            joined = " ".join(t for t in texts if t)
+            return joined if joined else None
+        return None
+
 
 class GeminiProvider(LLMProvider):
     """Google Gemini ER provider using generate_content with tool calling."""
@@ -196,8 +256,8 @@ class GeminiProvider(LLMProvider):
                 role="model",
                 parts=[types.Part.from_text(
                     text="Understood. I'm ready to control the robot arm using my vision "
-                    "and tool-calling capabilities. Give me a task and I'll start by "
-                    "looking at the scene."
+                    "and tool-calling capabilities. A camera frame will be provided "
+                    "automatically each turn. Give me a task."
                 )],
             ),
             types.Content(
@@ -278,3 +338,39 @@ class GeminiProvider(LLMProvider):
 
     def encode_text(self, text: str) -> Any:
         return self._types.Part.from_text(text=text)
+
+    def find_image_message_indices(self, messages: list[Any]) -> list[int]:
+        indices = []
+        for i, msg in enumerate(messages):
+            if not hasattr(msg, "role") or msg.role != "user":
+                continue
+            if not hasattr(msg, "parts") or not msg.parts:
+                continue
+            if any(hasattr(p, "inline_data") and p.inline_data is not None for p in msg.parts):
+                indices.append(i)
+        return indices
+
+    def replace_images_with_text(self, messages: list[Any], message_index: int,
+                                  summary_text: str) -> None:
+        types = self._types
+        msg = messages[message_index]
+        text_parts = [p.text for p in msg.parts if hasattr(p, "text") and p.text]
+        existing = " ".join(text_parts)
+        combined = f"[Previous frame summary: {summary_text}]"
+        if existing:
+            combined += f" {existing}"
+        messages[message_index] = types.Content(
+            role="user", parts=[types.Part.from_text(text=combined)]
+        )
+
+    def extract_assistant_text(self, messages: list[Any], message_index: int) -> str | None:
+        if message_index < 0 or message_index >= len(messages):
+            return None
+        msg = messages[message_index]
+        if not hasattr(msg, "role") or msg.role != "model":
+            return None
+        if not hasattr(msg, "parts") or not msg.parts:
+            return None
+        texts = [p.text for p in msg.parts if hasattr(p, "text") and p.text]
+        joined = " ".join(texts)
+        return joined if joined else None

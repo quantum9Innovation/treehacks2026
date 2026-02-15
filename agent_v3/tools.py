@@ -2,22 +2,12 @@
 
 TOOL_DECLARATIONS = [
     {
-        "name": "look",
-        "description": (
-            "Capture a fresh camera frame. Returns the raw color image (640x480) "
-            "with a labeled coordinate grid and a colorized depth image so you can "
-            "see the scene. After calling look(), you can call detect() or segment() "
-            "to locate objects."
-        ),
-        "parameters": {"type": "object", "properties": {}},
-    },
-    {
         "name": "detect",
         "description": (
             "Detect and segment an object using a natural language description. "
             "Returns the object's pixel centroid, bounding box, segmentation mask "
             "overlay, and 3D arm coordinates. Use this to discover and roughly locate "
-            "objects by description. Requires a prior look() call. "
+            "objects by description. Uses the latest auto-captured camera frame. "
             "Example queries: 'the red cup', 'the nearest object', 'the pen on the left'."
         ),
         "parameters": {
@@ -41,7 +31,7 @@ TOOL_DECLARATIONS = [
             "Returns a mask overlay image and the 3D arm coordinates at the "
             "exact pixel you specified. More precise than detect() — use this "
             "to visually confirm you are targeting the right object before moving. "
-            "Requires a prior look() call."
+            "Uses the latest auto-captured camera frame."
         ),
         "parameters": {
             "type": "object",

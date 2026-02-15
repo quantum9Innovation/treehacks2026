@@ -17,8 +17,8 @@ from motion_controller.motion import Motion
 from agent_v2.calibration import DEFAULT_CALIBRATION_PATH
 from agent_v2.coordinate_transform import CoordinateTransform
 
-from .llm import LLMProvider, LLMResponse, ToolCall
-from .prompts import SYSTEM_PROMPT, create_system_prompt, create_task_prompt
+from .llm import LLMProvider
+from .prompts import create_system_prompt, create_task_prompt
 from .tools import get_tool_declarations
 
 logger = logging.getLogger("agent_v3")
@@ -33,9 +33,6 @@ CONFIRM_TOOLS = {
     "move_to_xyz", "move_relative", "press_down",
     "force_move", "execute_trajectory",
 }
-
-# Tools that count as movement (trigger post-movement camera capture)
-MOVEMENT_TOOLS = CONFIRM_TOOLS
 
 
 class AgentV3:
@@ -84,10 +81,11 @@ class AgentV3:
             has_gemini_vision=self.gemini_vision is not None,
         )
 
-        # Frame cache (populated by look(), used by segment/detect/goto_pixel)
+        # Frame cache (auto-captured each turn, used by segment/detect/goto_pixel)
         self._last_color_image: np.ndarray | None = None
         self._last_depth_frame: rs.depth_frame | None = None
         self._last_depth_image: np.ndarray | None = None
+        self._sam2_needs_update: bool = True
 
     def start(self) -> None:
         """Start the agent (initialize hardware)."""
@@ -163,56 +161,72 @@ class AgentV3:
 
         return out
 
-    # ── Tool executors ──────────────────────────────────────────
+    # ── Auto-inject frame & history rewriting ─────────────────
 
-    def _execute_look(self, _args: dict[str, Any]) -> tuple[str, list[dict]]:
-        """Execute look tool: capture frame, return images.
+    def _capture_and_inject_frame(self, messages: list) -> None:
+        """Capture a fresh camera frame and inject it as a user message.
 
-        Returns (text_result, image_content_blocks).
-        Image blocks are dicts: {"type": "image", "data": bytes, "mime_type": str}
-        or {"type": "text", "text": str}.
+        Caches color/depth for detect/segment/goto_pixel. Sets _sam2_needs_update.
+        SAM2 encoding is deferred to _execute_segment() (lazy).
         """
         color_image, depth_image, depth_frame = self._capture_aligned_frames()
 
-        # Cache for subsequent tool calls
         self._last_color_image = color_image
         self._last_depth_frame = depth_frame
         self._last_depth_image = depth_image
+        self._sam2_needs_update = True
 
-        # Encode for SAM2 if available
-        if self.sam2 is not None:
-            print("Encoding image for SAM2...")
-            encode_time = self.sam2.set_image(color_image)
-            text_result = (
-                f"Camera frame captured (640x480). "
-                f"SAM2 image encoded in {encode_time:.1f}s. "
-                f"Ready for segment() and detect() queries."
-            )
-        else:
-            text_result = "Camera frame captured (640x480). Ready for detect() queries."
-
-        # Draw coordinate grid on a copy
         color_with_grid = self._draw_coordinate_grid(color_image)
 
-        image_content = [
-            {"type": "image", "data": self._encode_image(color_with_grid), "mime_type": "image/jpeg"},
-            {"type": "text", "text": "[Camera image with coordinate grid (labels every 80px). Depth image below.]"},
-            {"type": "image", "data": self._encode_image(depth_image), "mime_type": "image/jpeg"},
+        encoded_parts = [
+            self.provider.encode_image(self._encode_image(color_with_grid), "image/jpeg"),
+            self.provider.encode_text("[Camera image with coordinate grid (labels every 80px). Depth image below.]"),
+            self.provider.encode_image(self._encode_image(depth_image), "image/jpeg"),
         ]
+        self.provider.append_images(messages, encoded_parts)
 
-        return text_result, image_content
+    def _rewrite_image_history(self, messages: list) -> None:
+        """Replace all existing image messages with LLM-generated text summaries.
+
+        For each user message containing images, finds the next assistant/model
+        message and uses its text as the summary.
+        """
+        image_indices = self.provider.find_image_message_indices(messages)
+
+        for idx in image_indices:
+            # Find the next assistant message after this image
+            summary = None
+            for j in range(idx + 1, len(messages)):
+                text = self.provider.extract_assistant_text(messages, j)
+                if text:
+                    summary = text[:500] + "..." if len(text) > 500 else text
+                    break
+
+            if summary is None:
+                summary = "Frame was captured but no observation was recorded."
+
+            self.provider.replace_images_with_text(messages, idx, summary)
+
+    # ── Tool executors ──────────────────────────────────────────
 
     def _execute_detect(self, args: dict[str, Any]) -> tuple[str, list[dict]]:
         """Execute detect tool: Gemini ER segmentation with natural language query."""
         query = args["query"]
 
         if self._last_color_image is None or self._last_depth_frame is None:
+<<<<<<< HEAD
             return json.dumps(
                 {
                     "status": "error",
                     "message": "No image available. Call look() first.",
                 }
             ), []
+=======
+            return json.dumps({
+                "status": "error",
+                "message": "No image available (frame not yet captured).",
+            }), []
+>>>>>>> d30ca81 (Replace manual look() tool with auto-injected camera frames per turn)
 
         if self.gemini_vision is None:
             return json.dumps({
@@ -297,7 +311,7 @@ class AgentV3:
         if self._last_color_image is None or self._last_depth_frame is None:
             return json.dumps({
                 "status": "error",
-                "message": "No image available. Call look() first.",
+                "message": "No image available (frame not yet captured).",
             }), []
 
         if self.sam2 is None:
@@ -305,6 +319,13 @@ class AgentV3:
                 "status": "error",
                 "message": "SAM2 not available.",
             }), []
+
+        # Lazy SAM2 encoding — only when segment is actually called
+        if self._sam2_needs_update:
+            print("Encoding image for SAM2...")
+            encode_time = self.sam2.set_image(self._last_color_image)
+            logger.info(f"SAM2 image encoded in {encode_time:.2f}s")
+            self._sam2_needs_update = False
 
         print(f"Running SAM2 segmentation at ({pixel_x}, {pixel_y})...")
         t0 = time.time()
@@ -430,7 +451,7 @@ class AgentV3:
         z_offset_mm = args.get("z_offset_mm", 50)
 
         if self._last_depth_frame is None:
-            return {"status": "error", "message": "No depth frame available. Call look() first."}
+            return {"status": "error", "message": "No depth frame available (frame not yet captured)."}
 
         depth_mm = self.ct.get_depth_at_pixel(self._last_depth_frame, pixel_x, pixel_y)
         if depth_mm is None:
@@ -594,10 +615,6 @@ class AgentV3:
     ) -> tuple[dict[str, Any] | str, list[dict] | None]:
         """Execute a tool call. Returns (result, optional_image_content_blocks)."""
         # Vision tools return images, no confirmation needed
-        if name == "look":
-            print("Capturing camera frame...")
-            return self._execute_look(args)
-
         if name == "detect":
             print(f"Detecting: {args.get('query', '?')}...")
             return self._execute_detect(args)
@@ -685,7 +702,10 @@ class AgentV3:
     # ── Agent loop ──────────────────────────────────────────────
 
     def process_task(self, task: str) -> str:
-        """Process a task using the agent loop (provider-agnostic)."""
+        """Process a task using the agent loop (provider-agnostic).
+
+        Each iteration: rewrite old images → inject fresh frame → LLM → execute tools.
+        """
         logger.info(f"Processing task: {task}")
 
         system_prompt = create_system_prompt(
@@ -703,6 +723,14 @@ class AgentV3:
             iteration += 1
             print(f"\n--- Agent iteration {iteration} ---")
 
+            # Step 1: Replace old image messages with text summaries
+            self._rewrite_image_history(messages)
+
+            # Step 2: Auto-inject fresh camera frame
+            print("Capturing camera frame...")
+            self._capture_and_inject_frame(messages)
+
+            # Step 3: Call LLM
             try:
                 response = self.provider.chat(messages, self.tool_declarations)
             except Exception as e:
@@ -712,14 +740,14 @@ class AgentV3:
             if response.text:
                 print(f"\nAgent: {response.text}")
 
-            # Add model response to conversation
+            # Step 4: Add model response to conversation
             self.provider.append_assistant_response(messages, response)
 
+            # Step 5: If no tool calls, task is done
             if not response.tool_calls:
                 return response.text or "Task completed."
 
-            # Execute tool calls
-            movement_executed = False
+            # Step 6: Execute tool calls
             pending_image_blocks: list[dict] = []
 
             for tc in response.tool_calls:
@@ -732,12 +760,8 @@ class AgentV3:
                 if images:
                     pending_image_blocks.extend(images)
 
-                if tc.name in MOVEMENT_TOOLS:
-                    result_dict = result if isinstance(result, dict) else {}
-                    if result_dict.get("status") == "success":
-                        movement_executed = True
-
-            # Add images from look/detect/segment as a separate user message
+            # Step 7: Add images from detect/segment as a user message
+            # (will be rewritten to text summaries on next iteration)
             if pending_image_blocks:
                 encoded_parts = []
                 for block in pending_image_blocks:
@@ -750,27 +774,6 @@ class AgentV3:
                             self.provider.encode_text(block["text"])
                         )
                 self.provider.append_images(messages, encoded_parts)
-
-            # After movement, capture a fresh view for verification
-            if movement_executed:
-                print("Capturing post-movement view...")
-                time.sleep(0.5)
-                text_result, image_blocks = self._execute_look({})
-
-                encoded_parts = []
-                for block in image_blocks:
-                    if block["type"] == "image":
-                        encoded_parts.append(
-                            self.provider.encode_image(block["data"], block["mime_type"])
-                        )
-                    elif block["type"] == "text":
-                        encoded_parts.append(
-                            self.provider.encode_text(block["text"])
-                        )
-                self.provider.append_images(
-                    messages, encoded_parts,
-                    text="[Updated view after movement. Confirm task completion or continue if more actions needed.]"
-                )
 
         return "Maximum iterations reached. Task may be incomplete."
 
@@ -856,8 +859,8 @@ class AgentV3:
 
         try:
             proc = CalibrationProcedure(self.camera, self.motion, self.ct)
-            R, t, rmse = proc.run(save_path=self._calibration_path)
-            self.ct._M = np.column_stack([R, t])
+            M, rmse = proc.run(save_path=self._calibration_path)
+            self.ct._M = M
             print("Calibration loaded into coordinate transform.")
         except Exception as e:
             print(f"Calibration failed: {e}")

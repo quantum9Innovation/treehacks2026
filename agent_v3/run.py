@@ -49,8 +49,8 @@ def main() -> int:
     parser.add_argument(
         "--reasoning-effort",
         type=str,
-        choices=["low", "medium", "high"],
-        default="low",
+        choices=["none", "low", "medium", "high"],
+        default="none",
         help="Reasoning effort for OpenAI reasoning models (default: low)",
     )
 
