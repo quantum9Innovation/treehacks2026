@@ -98,7 +98,7 @@ def a : Float := 0.2
 def b : Float := 0.2
 def c : Float := 5.7
 
-def attractor : Point3D → Derivative3D := Math.lorenz a b c 
+def attractor : Point3D → Derivative3D := Math.rossler a b c 
 def rk4Samples : Nat := 100000
 def nSamples : Nat := 600
 def selectSamples : List Nat := List.map (λ x => x.toUInt64.toNat) (Math.linspace {min := 0, max := Float.ofNat (nSamples - 1)} nSamples)
