@@ -83,7 +83,7 @@ def fk(base, shoulder, elbow):
 
 
 class Motion:
-    def __init__(self, port: str | None = None, inverted: bool = False):
+    def __init__(self, port: str | None = None, inverted: bool = False, base_offset: float = 0.0):
         resolved_port = port or detect_serial_port()
         if resolved_port is None:
             raise RuntimeError(
@@ -97,7 +97,14 @@ class Motion:
         )
         self.ground_z = None
         self.inverted = inverted
+        self.base_offset = base_offset
         self.last_move_error_mm = None
+
+    def _ctrl_joints(self, radians, speed=2000, acc=200):
+        """Send joint command with base_offset applied to the base joint."""
+        adjusted = list(radians)
+        adjusted[0] += self.base_offset
+        self.arm.joints_radian_ctrl(radians=adjusted, speed=speed, acc=acc)
 
     def _to_native_z(self, z):
         """Convert ground-relative Z to native Z."""
