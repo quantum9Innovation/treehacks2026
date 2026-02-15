@@ -119,6 +119,19 @@ def six_seven(monitor_arm, right_arm, back_arm, left_arm):
         time.sleep(0.05)
 
 
+def helix(monitor_arm, right_arm, back_arm, left_arm):
+    data = load("trajectories/helix.json")
+    stream = data["trajectory"]
+    delay = data["delay"]
+
+    for x, y, z, t in stream:
+        monitor_arm.pose_ctrl([x, y, z, t])
+        back_arm.pose_ctrl([100, 0, 75, 0])
+        right_arm.pose_ctrl([x, y, z, t])
+        left_arm.pose_ctrl([x, y, z, t])
+        time.sleep(delay)
+
+
 def main():
     port_right = "/dev/ttyUSB0"
     back_port = "/dev/ttyUSB1"
@@ -149,7 +162,7 @@ def main():
 
     try:
         while True:
-            quad_spring(monitor_arm, right_arm, back_arm, left_arm)
+            helix(monitor_arm, right_arm, back_arm, left_arm)
 
     except KeyboardInterrupt:
         print("Exiting...")
