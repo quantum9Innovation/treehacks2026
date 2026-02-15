@@ -1,6 +1,7 @@
 import glob
 import sys
 import time
+import math
 from typing import Callable, NewType
 
 from read import load
@@ -49,8 +50,73 @@ def double_lemniscate(monitor_arm, right_arm, back_arm, left_arm):
         back_arm.pose_ctrl([100, 0, 75, 0])
         right_arm.pose_ctrl([x, y, z, t])
         left_arm.pose_ctrl([x, y, z, t])
+        time.sleep(delay)
 
-    time.sleep(delay)
+
+def quad_spring(monitor_arm, right_arm, back_arm, left_arm):
+    data = load("trajectories/spring.json")
+    data2 = load("trajectories/springShift1.json")
+    data3 = load("trajectories/springShift2.json")
+    data4 = load("trajectories/springShift3.json")
+    stream = data["trajectory"]
+    stream2 = data2["trajectory"]
+    stream3 = data3["trajectory"]
+    stream4 = data4["trajectory"]
+    n = min(len(stream), len(stream2), len(stream3), len(stream4))
+    delay = data["delay"]
+
+    for i in range(n):
+        x1, y1, z1, t1 = stream[i]
+        x2, y2, z2, t2 = stream2[i]
+        x3, y3, z3, t3 = stream3[i]
+        x4, y4, z4, t4 = stream4[i]
+        monitor_arm.pose_ctrl([x1, y1, z1, t1])
+        back_arm.pose_ctrl([x2, y2, z2, t2])
+        right_arm.pose_ctrl([x3, y3, z3, t3])
+        left_arm.pose_ctrl([x4, y4, z4, t4])
+        time.sleep(delay)
+
+
+def six_seven(monitor_arm, right_arm, back_arm, left_arm):
+    right_arm.pose_ctrl([100, 0, 75, 0])
+    left_arm.pose_ctrl([100, 0, 75, 0])
+
+    min_theta = 90
+    max_theta = 160
+    theta_diff = max_theta - min_theta
+    theta_baseline = (min_theta + max_theta) / 2
+
+    n = 10
+    k = 2 * math.pi / n
+
+    for t in range(n):
+        monitor_arm.joints_angle_ctrl(
+            [0, -15, theta_baseline + theta_diff / 2 * math.sin(t * k), 0], 1024, 128
+        )
+        back_arm.joints_angle_ctrl(
+            [
+                0,
+                -15,
+                theta_baseline + theta_diff / 2 * math.sin(t * k + math.pi / 2),
+                0,
+            ],
+            1024,
+            128,
+        )
+        left_arm.joints_angle_ctrl(
+            [0, -15, theta_baseline + theta_diff / 2 * math.sin(t * k), 0], 1024, 128
+        )
+        right_arm.joints_angle_ctrl(
+            [
+                0,
+                -15,
+                theta_baseline + theta_diff / 2 * math.sin(t * k + math.pi / 2),
+                0,
+            ],
+            1024,
+            128,
+        )
+        time.sleep(0.05)
 
 
 def main():
@@ -83,7 +149,7 @@ def main():
 
     try:
         while True:
-            double_lemniscate(monitor_arm, right_arm, back_arm, left_arm)
+            quad_spring(monitor_arm, right_arm, back_arm, left_arm)
 
     except KeyboardInterrupt:
         print("Exiting...")
